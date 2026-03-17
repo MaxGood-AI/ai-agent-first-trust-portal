@@ -1,0 +1,26 @@
+# Web framework
+Flask==3.1.0
+flask-sqlalchemy==3.1.1
+gunicorn==23.0.0
+
+# API documentation
+flasgger==0.9.7.1
+
+# Database
+psycopg2-binary==2.9.10
+SQLAlchemy==2.0.36
+alembic==1.14.1
+
+# AWS SDK (optional — evidence collection only)
+boto3==1.36.14
+
+# HTTP client (GitHub evidence collection)
+requests==2.32.3
+
+# Environment
+python-dotenv==1.0.1
+
+# Testing
+pytest==8.3.4
+pytest-cov==6.0.0
+moto[all]==5.0.27

@@ -1,0 +1,55 @@
+# Environment
+.env
+*.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.override.yml
+
+# Database
+*.db
+*.sqlite3
+
+# Coverage
+.coverage
+htmlcov/
+
+# Logs
+*.log
+logs/
+
+# Evidence artifacts (may contain sensitive data)
+evidence-artifacts/
+
+# Decision logs (session transcripts — ingested into DB, not committed)
+decision-logs/
+
+# Failed upload retries (hook offline fallback)
+decision-logs/.retry/
+
+# Migration exports
+migration/trustcloud_export.json
+migration/trustcloud_evidence_export.json

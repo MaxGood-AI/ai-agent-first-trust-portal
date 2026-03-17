@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Team Members{% endblock %}
+
+{% block content %}
+<h1>Team Members</h1>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+{% if messages %}
+<div class="flash-messages">
+    {% for category, message in messages %}
+    <div class="flash {{ category }}">{{ message }}</div>
+    {% endfor %}
+</div>
+{% endif %}
+{% endwith %}
+
+<h2>Add Team Member</h2>
+<form method="POST" action="{{ url_for('admin.create_team_member') }}" class="team-form">
+    <div class="form-row">
+        <label for="name">Name</label>
+        <input type="text" id="name" name="name" required placeholder="e.g. Jane Smith or Claude Opus">
+    </div>
+    <div class="form-row">
+        <label for="email">Email</label>
+        <input type="email" id="email" name="email" required placeholder="e.g. jane@example.com">
+    </div>
+    <div class="form-row">
+        <label for="role">Role</label>
+        <select id="role" name="role">
+            <option value="human">Human</option>
+            <option value="agent">Agent</option>
+        </select>
+    </div>
+    <div class="form-row">
+        <label>
+            <input type="checkbox" name="is_compliance_admin"> Compliance Admin
+        </label>
+    </div>
+    <button type="submit">Create Member</button>
+</form>
+
+<h2>Current Members</h2>
+<table class="data-table">
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Email</th>
+            <th>Role</th>
+            <th>Admin</th>
+            <th>API Key</th>
+            <th>Status</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for member in members %}
+        <tr class="{{ 'inactive' if not member.is_active }}">
+            <td>{{ member.name }}</td>
+            <td>{{ member.email }}</td>
+            <td>{{ member.role }}</td>
+            <td>{{ "Yes" if member.is_compliance_admin else "No" }}</td>
+            <td><code>{{ member.api_key[:8] }}...{{ member.api_key[-4:] }}</code></td>
+            <td>{{ "Active" if member.is_active else "Inactive" }}</td>
+            <td>
+                {% if member.is_active %}
+                <form method="POST" action="{{ url_for('admin.regenerate_team_member_key', member_id=member.id) }}" style="display:inline">
+                    <button type="submit" class="btn-small">Regenerate Key</button>
+                </form>
+                <form method="POST" action="{{ url_for('admin.deactivate_team_member', member_id=member.id) }}" style="display:inline">
+                    <button type="submit" class="btn-small btn-danger">Deactivate</button>
+                </form>
+                {% else %}
+                <em>Deactivated</em>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

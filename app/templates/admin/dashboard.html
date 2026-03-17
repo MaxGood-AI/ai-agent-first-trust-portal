@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Admin Dashboard{% endblock %}
+
+{% block content %}
+<div style="display: flex; justify-content: space-between; align-items: center;">
+    <h1>Compliance Admin Dashboard</h1>
+    <a href="{{ url_for('admin.logout') }}">Logout</a>
+</div>
+
+<div class="admin-grid">
+    <div class="stat-card">
+        <h3>Controls</h3>
+        <span class="stat">{{ total_controls }}</span>
+    </div>
+    <div class="stat-card">
+        <h3>Tests</h3>
+        <span class="stat">{{ total_tests }}</span>
+    </div>
+    <div class="stat-card warning">
+        <h3>Evidence Gaps</h3>
+        <span class="stat">{{ gaps }}</span>
+        <p>{{ missing_evidence }} missing &middot; {{ outdated_evidence }} outdated</p>
+    </div>
+    <div class="stat-card">
+        <h3>Policies</h3>
+        <span class="stat">{{ approved_policies }}/{{ total_policies }}</span>
+        <p>approved</p>
+    </div>
+    <div class="stat-card">
+        <h3>Team Members</h3>
+        <span class="stat">{{ total_members }}</span>
+        <p>active</p>
+    </div>
+</div>
+
+<h2>Quick Actions</h2>
+<ul>
+    <li><a href="{{ url_for('admin.evidence_management') }}">Manage Evidence Gaps</a></li>
+    <li><a href="{{ url_for('admin.team_management') }}">Manage Team Members</a></li>
+</ul>
+{% endblock %}

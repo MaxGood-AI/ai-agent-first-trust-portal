@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Trust Portal{% endblock %}
+
+{% block content %}
+<section class="hero">
+    <h1>{{ brand_name }} Trust Portal</h1>
+    <p>{{ company_name }} is committed to maintaining the highest standards of security, availability, confidentiality, privacy, and processing integrity.</p>
+</section>
+
+<section class="score-overview">
+    <div class="score-card primary">
+        <h2>Overall Compliance</h2>
+        <span class="score">{{ "%.0f"|format(compliance_score) }}%</span>
+        <p>{{ total_controls }} controls &middot; {{ total_policies }} approved policies</p>
+    </div>
+</section>
+
+<section class="categories">
+    <h2>Trust Service Criteria</h2>
+    <div class="category-grid">
+        {% for category, data in categories.items() %}
+        <div class="category-card">
+            <h3>{{ category|replace('_', ' ')|title }}</h3>
+            <span class="score">{{ "%.0f"|format(data.score) }}%</span>
+            <p>{{ data.controls }} controls &middot; {{ data.passed_tests }}/{{ data.total_tests }} tests passing</p>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+
+<section class="contact">
+    <h2>Questions?</h2>
+    <p>For compliance inquiries, contact <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>.</p>
+</section>
+{% endblock %}

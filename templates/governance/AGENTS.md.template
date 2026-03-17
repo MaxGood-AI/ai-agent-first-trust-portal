@@ -1,0 +1,223 @@
+# AGENTS.md
+
+Copyright {{ YEAR }} {{ LEGAL_ENTITY }} - All rights reserved.
+
+This file provides guidance to AI coding agents (e.g., OpenAI Codex, Claude Code) when working with code in this repository.
+
+## Platform Overview
+
+<!-- CUSTOMIZE: Describe your platform in 2-3 sentences. What does it do? Who is it for?
+     What compliance framework are you working towards? Example:
+
+This directory contains the **Acme Corp platform** — a multi-repo system that implements
+[describe your product]. The platform is working towards **SOC 2 Type 2** compliance;
+all code changes must consider data handling, logging, access controls, audit trails, and GDPR.
+-->
+
+{{ PLATFORM_DESCRIPTION }}
+
+## Database Change Policy
+
+<!-- CUSTOMIZE: Define your organization's policy on database schema changes.
+     Remove this section if you have no restrictions. Example:
+
+**Do NOT modify database schemas** unless the user explicitly requests the change.
+Manual database refactoring work may be in progress, and AI-initiated schema changes
+could cause conflicts.
+-->
+
+{{ DATABASE_CHANGE_POLICY }}
+
+## Parent Repository
+
+<!-- CUSTOMIZE: Describe where this governance repo is hosted. Example:
+
+This parent directory (`~/Development`) is tracked in a git repository at
+`{{ GOVERNANCE_REPO_URL }}`. It contains only root-level governance files
+(CLAUDE.md, AGENTS.md, README.md); all sub-repos are excluded via `.gitignore`.
+-->
+
+This parent directory (`~/Development`) is tracked in a git repository. It contains only root-level governance files (CLAUDE.md, AGENTS.md, README.md); all sub-repos are excluded via `.gitignore`.
+
+## Repository Map
+
+<!-- CUSTOMIZE: List all repositories in your development environment. Add rows for each repo.
+     Group them logically (core platform, integrations, utilities, etc.). -->
+
+| Repo | Tech | Purpose |
+|------|------|---------|
+| **MGCompliance** | Python/Flask, PostgreSQL, Jinja2 | Self-hosted trust portal and SOC 2 compliance management. Port 5100. |
+<!-- Add your repositories here -->
+
+## Architecture
+
+<!-- CUSTOMIZE: Add an ASCII diagram or description showing how your services connect.
+     Example:
+
+```
+┌──────────┐       ┌─────────────┐
+│ Frontend │──────▶│  Backend    │
+│          │  API  │  (API Hub)  │
+└──────────┘       └──────┬──────┘
+                          │
+              ┌───────────┘
+              ▼
+        ┌───────────┐
+        │  Bot      │
+        └───────────┘
+```
+-->
+
+{{ ARCHITECTURE_DIAGRAM }}
+
+## Common Development Commands
+
+<!-- CUSTOMIZE: Add the development commands for each of your repos.
+     Follow the format below. -->
+
+### MGCompliance (Trust Portal)
+```bash
+docker compose up --build
+docker exec mgcompliance pytest tests/ -v --cov=app
+```
+
+<!-- Add commands for your other repos here -->
+
+## Cross-Cutting Conventions
+
+- **Docker-first development**: services run via `docker compose` wherever possible
+- **Environment config**: all services use `.env` files; new env vars must be documented in the project's README
+- **Never commit secrets**: no hardcoded credentials in any file; all secrets belong in gitignored `.env` files
+- **Self-documenting code**: all code should be as self-documenting as possible. Code that serves as an API between repos or as a public API must have sufficient documentation for a developer to understand how to use it. If an API endpoint lacks good documentation, either: (a) correct it immediately if the current work uses or modifies that API, or (b) create a new KanbanZone card noting the gap and place a `TODO: <card link>` comment at the appropriate point in the code.
+- **Individual repos have their own CLAUDE.md or AGENTS.md** — always check those first when working within a specific project.
+
+<!-- CUSTOMIZE: Add language-specific conventions for your stack. Examples:
+
+- **Python projects**: PEP 8, 4-space indent, `snake_case` functions, `PascalCase` classes
+- **TypeScript/React**: 2-space indentation, double quotes, semicolons, `PascalCase` components
+- **Go projects**: standard gofmt, exported types PascalCase
+-->
+
+{{ LANGUAGE_CONVENTIONS }}
+
+## External Automations
+
+<!-- CUSTOMIZE: If you have external automation systems (n8n, Zapier, etc.) that interact
+     with your codebase or databases, document them here. Remove this section if not applicable.
+
+Important: external automations may call your databases and APIs directly, so code changes
+may break them. Document the connection points. -->
+
+{{ EXTERNAL_AUTOMATIONS }}
+
+## KanbanZone Agent Access
+
+KanbanZone credentials (`KANBANZONE_API_KEY` and `KANBANZONE_BOARD_ID`) are stored in `./.env` at the repository root. The `kanban-zone` Claude Skill reads these environment variables to interact with the board.
+
+## KanbanZone Card Workflow
+
+**CRITICAL:** When asked to work on a KanbanZone card, you MUST follow this exact sequence. Never skip steps.
+
+1. **Move the card** to the appropriate column: **"Tasking"** for development cards, or **"Planning"** for business cards.
+2. **Generate a detailed plan** for the work to be done.
+3. **Ask the user for feedback** on the plan and iterate until approved.
+4. **Append the approved plan to the card** description using the KanbanZone skill, BEFORE starting any implementation work.
+5. **Do the work**, including writing or updating automated tests if applicable.
+6. **Present the completed work to the user** for review. Only proceed to the next step if the user accepts.
+7. **Run the independent code review** — compose the review prompt from `MGCompliance/templates/governance/REVIEW-PROMPT.md`, substituting the card number, board URL, and repo list. Invoke the review agent (e.g., `codex --prompt "..."`). Wait for the review to complete and findings to be appended to the card. Only proceed if the verdict is **PASS**. If **FAIL**, present the blocking issues to the user and resolve them before retrying.
+8. **Commit and push** the changes (following the Commit Style guidelines).
+9. **Move the card** to the appropriate column: **"Ready to Release to the World"** for Expedite cards, **"Final Review"** for normal development cards, or **"Reflection / Learning"** for business cards. Never move cards directly to "DONE".
+
+## Linting
+
+All repos with linters configured must enforce a **zero-warnings policy**. Linting must pass cleanly as a quality gate before code is considered complete.
+
+## Testing
+
+- **Docker-only testing — no venv:** All automated tests MUST be run inside Docker containers — never directly on the host machine. Do NOT create or use Python virtual environments (`venv`, `virtualenv`, `pipenv`, `conda`, etc.). Dependencies are managed inside Docker images.
+- **Coverage target**: >= 80% for repos with automated test suites.
+- **Test business logic directly** — do not test framework endpoints (e.g., Flask routes). Do not test trivial database calls; mock the DB only for complex query logic.
+- **Mock all external services** (use `moto` for AWS, `unittest.mock` for others in Python). No network calls or external side effects in tests.
+- **All production services should have automated tests.** Repos without test suites should adopt an appropriate framework with mocked externals when tests are added.
+
+<!-- CUSTOMIZE: Add any test-specific notes for your repos. Example:
+
+- Tests for **MyFrontend** live in the **MyE2ETests** repo (Playwright), not in the frontend repo itself.
+-->
+
+## Definition of Done
+
+- Completed KanbanZone cards move to **"Ready to Release to the World"** (Expedite), **"Final Review"** (normal development), or **"Reflection / Learning"** (business) — never directly to "DONE". A staging environment review step is required before cards are considered done.
+- The `## Verified` section in commit messages serves as a required sign-off on how each change was validated.
+
+## Discrepancy Rule
+
+If any discrepancy exists between a repo's CLAUDE.md and AGENTS.md, it must be flagged immediately and the user asked for repair instructions.
+
+## Key Domain Terms
+
+<!-- CUSTOMIZE: Define the domain-specific terminology for your product. This helps AI agents
+     understand your codebase and communicate accurately. Example:
+
+- **Widget** = the core product entity (stored as "item" in the database)
+- **Workspace** = a customer organization/tenant
+-->
+
+{{ DOMAIN_TERMS }}
+
+## SOC 2 Evidence Chain
+
+All development work produces a formal evidence chain for SOC 2 compliance. The evidence is captured automatically — no manual export steps.
+
+### Evidence Artifacts
+
+1. **Decision Log** — Every AI agent session transcript (prompts, responses, tool calls — excluding internal thinking) is automatically captured and staged in `MGCompliance/decision-logs/`. These are the authoritative record of what was discussed, decided, and implemented.
+2. **KanbanZone Cards** — Approved plans appended to card descriptions before implementation begins. These are the design review and change approval evidence.
+3. **User Verification ("done." protocol)** — When an AI agent asks the user to verify changes and the user responds **"done."**, this constitutes a formal smoke test acknowledgment. The decision log captures the exact context: what was asked, what was tested, and the user's confirmation. No further documentation is required.
+4. **Independent Code Review** — Before final commit, the main agent automatically invokes an independent review agent (e.g., OpenAI Codex) using the prompt template in `MGCompliance/templates/governance/REVIEW-PROMPT.md`. The review covers functionality, security, testing, and style. Findings and a PASS/FAIL verdict are appended to the KanbanZone card (see "Independent Code Review Protocol" below).
+5. **Git Commits** — Structured `## Problem / ## Solution / ## Verified` messages with KanbanZone card links and `Co-Authored-By` attribution.
+6. **CLAUDE.md / AGENTS.md** — These governance files are **formal policy documents**. Every version (tracked in git) is a formal policy version for SOC 2 purposes. Changes to these files are changes to compliance policy.
+
+### The "done." Protocol
+
+When an AI agent presents completed work and asks the user to test or verify:
+- The user responding **"done."** means they have tested the changes AND smoke-tested likely areas of regression.
+- This is recorded in the session transcript (decision log) as formal testing evidence.
+- No additional test documentation is needed beyond the transcript context.
+
+### Independent Code Review Protocol
+
+This review is **automated** — the main agent (e.g., Claude Code) invokes an independent review agent (e.g., OpenAI Codex) as step 7 of the KanbanZone Card Workflow. No manual intervention is needed.
+
+**How it works:**
+
+1. The main agent reads the review prompt template from `MGCompliance/templates/governance/REVIEW-PROMPT.md`
+2. It substitutes the card number, board URL, and list of repos with changes
+3. It invokes the review agent CLI (e.g., `codex --prompt "<composed prompt>"`)
+4. The review agent performs a complete static and dynamic analysis:
+   - Functionality correctness against the approved plan
+   - Refactoring completeness
+   - Cross-repo consistency
+   - Security (no secrets, no OWASP vulnerabilities)
+   - Unit tests (happy path, edge cases, malicious input)
+   - E2E tests where applicable
+   - Test execution (all tests pass)
+   - Lint/style compliance
+5. The review agent appends a `### Independent Code Review` section to the KanbanZone card with detailed findings and a **VERDICT: PASS** or **VERDICT: FAIL**
+6. The main agent reads the verdict:
+   - **PASS** — proceeds to commit
+   - **FAIL** — presents blocking issues to the user for resolution, then retries the review
+
+This review serves as the independent code review evidence for SOC 2 change management controls. The review prompt, findings, and verdict are all captured on the KanbanZone card as formal audit evidence.
+
+### Decision Log Capture
+
+Session transcripts are automatically captured by hooks scoped to the development directory. Personal projects in other directories are never logged. Transcripts are staged in `MGCompliance/decision-logs/` for ingestion into the compliance database.
+
+## Commit Style
+
+- **Subject line**: short imperative verb phrase under ~72 chars (e.g., `Fix oversized content chunks`). Start with a verb: `Add`, `Fix`, `Update`.
+- **Body** (for non-trivial changes): use markdown formatting with `## Problem`, `## Solution`, and `## Verified` sections to explain *why* the change was made, *what* was done, and *how* it was validated. If the change adds or modifies environment variables, note the impact in the body.
+- **Trivial changes**: only typo corrections are considered trivial and may omit the body. All other changes deserve the full message format.
+- **KanbanZone**: append the relevant board card URL as the last line before `Co-Authored-By`.
+- **Co-authorship**: when AI-assisted, end with `Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>` (or the model used).

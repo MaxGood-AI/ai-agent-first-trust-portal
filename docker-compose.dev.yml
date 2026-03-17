@@ -1,0 +1,39 @@
+services:
+  mgcompliance:
+    build: .
+    container_name: mgcompliance-dev
+    ports:
+      - "5100:5100"
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    environment:
+      - FLASK_ENV=development
+      - DATABASE_URL=postgresql://mgcompliance:password@db:5432/mgcompliance
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      bash -c "alembic upgrade head &&
+               flask run --host=0.0.0.0 --port=5100 --reload"
+
+  db:
+    image: postgres:17
+    container_name: mgcompliance-db
+    environment:
+      POSTGRES_DB: mgcompliance
+      POSTGRES_USER: mgcompliance
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mgcompliance"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:

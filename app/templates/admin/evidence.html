@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Evidence Management{% endblock %}
+
+{% block content %}
+<h1>Evidence Management</h1>
+<p>Tests requiring evidence submission or updates.</p>
+
+{% if tests %}
+<table>
+    <thead>
+        <tr>
+            <th>Test</th>
+            <th>Status</th>
+            <th>Due</th>
+            <th>Control</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for test in tests %}
+        <tr class="{{ test.evidence_status }}">
+            <td>{{ test.name }}</td>
+            <td><span class="badge {{ test.evidence_status }}">{{ test.evidence_status }}</span></td>
+            <td>{{ test.due_at.strftime('%Y-%m-%d') if test.due_at else '—' }}</td>
+            <td>{{ test.control.name if test.control else '—' }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>All evidence is current. No action needed.</p>
+{% endif %}
+{% endblock %}

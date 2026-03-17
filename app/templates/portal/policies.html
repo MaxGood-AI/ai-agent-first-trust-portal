@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Policies{% endblock %}
+
+{% block content %}
+<h1>Policy Library</h1>
+<p>All current, approved policies governing {{ brand_name }}'s compliance program.</p>
+
+{% if policies %}
+<table>
+    <thead>
+        <tr>
+            <th>Policy</th>
+            <th>Category</th>
+            <th>Version</th>
+            <th>Approved</th>
+            <th>Next Review</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for policy in policies %}
+        <tr>
+            <td>{{ policy.title }}</td>
+            <td>{{ policy.category|replace('_', ' ')|title }}</td>
+            <td>{{ policy.version }}</td>
+            <td>{{ policy.approved_at.strftime('%Y-%m-%d') if policy.approved_at else '—' }}</td>
+            <td>{{ policy.next_review_at.strftime('%Y-%m-%d') if policy.next_review_at else '—' }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>Policy library is being populated. Check back soon.</p>
+{% endif %}
+{% endblock %}

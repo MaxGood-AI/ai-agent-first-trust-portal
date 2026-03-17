@@ -1,0 +1,33 @@
+"""MGCompliance — Self-hosted trust portal for SOC 2 compliance."""
+
+from flasgger import Swagger
+from flask import Flask
+
+from app.config import Config
+
+
+def create_app(config_class=Config):
+    app = Flask(__name__)
+    app.config.from_object(config_class)
+
+    from app.models import db
+    db.init_app(app)
+
+    from app.routes.portal import portal_bp
+    from app.routes.admin import admin_bp
+    from app.routes.api import api_bp
+
+    app.register_blueprint(portal_bp)
+    app.register_blueprint(admin_bp, url_prefix="/admin")
+    app.register_blueprint(api_bp, url_prefix="/api")
+
+    Swagger(app, template={
+        "info": {
+            "title": app.config["SWAGGER"]["title"],
+            "description": app.config["SWAGGER"]["description"],
+            "version": app.config["SWAGGER"]["version"],
+        },
+        "basePath": "/api",
+    })
+
+    return app

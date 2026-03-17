@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Controls{% endblock %}
+
+{% block content %}
+<h1>SOC 2 Controls</h1>
+
+{% for category, controls in grouped_controls.items() %}
+<section class="control-group">
+    <h2>{{ category|replace('_', ' ')|title }}</h2>
+    <ul>
+        {% for control in controls %}
+        <li>
+            <strong>{{ control.name }}</strong>
+            {% if control.description %}<p>{{ control.description }}</p>{% endif %}
+            <span class="badge {{ control.state }}">{{ control.state }}</span>
+        </li>
+        {% endfor %}
+    </ul>
+</section>
+{% endfor %}
+{% endblock %}
