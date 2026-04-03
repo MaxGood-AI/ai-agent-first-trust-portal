@@ -17,6 +17,7 @@ class Control(db.Model):
     )
     state = db.Column(db.String(50), default="adopted")
     trustcloud_id = db.Column(db.String(36), comment="Original TrustCloud control ID for migration tracking")
+    other_data = db.Column(db.JSON, server_default="{}", comment="Unmapped fields from data imports")
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = db.Column(
         db.DateTime,

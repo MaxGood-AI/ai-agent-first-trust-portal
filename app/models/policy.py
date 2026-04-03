@@ -24,6 +24,7 @@ class Policy(db.Model):
     approved_by = db.Column(db.String(255))
     next_review_at = db.Column(db.DateTime)
     trustcloud_id = db.Column(db.String(36), comment="Original TrustCloud policy ID")
+    other_data = db.Column(db.JSON, server_default="{}", comment="Unmapped fields from data imports")
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = db.Column(
         db.DateTime,

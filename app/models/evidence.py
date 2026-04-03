@@ -20,6 +20,7 @@ class Evidence(db.Model):
     collected_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     collector_name = db.Column(db.String(100), comment="Name of the collector script, if automated")
     trustcloud_id = db.Column(db.String(36), comment="Original TrustCloud evidence ID")
+    other_data = db.Column(db.JSON, server_default="{}", comment="Unmapped fields from data imports")
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     def __repr__(self):

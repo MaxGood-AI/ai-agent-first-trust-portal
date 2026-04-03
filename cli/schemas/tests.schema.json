@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tests Data File",
+  "description": "Compliance test records. Array of test objects loaded by `cli init --data-dir`.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["id", "control_id", "name"],
+    "properties": {
+      "id": { "type": "string", "format": "uuid" },
+      "control_id": { "type": "string", "format": "uuid", "description": "FK to controls.id" },
+      "name": { "type": "string" },
+      "question": { "type": ["string", "null"] },
+      "recommendation": { "type": "string" },
+      "status": {
+        "type": "string",
+        "enum": ["success", "failure", "not_run", "excluded"],
+        "description": "Data values. Mapped to model values: success→passed, failure→failed, not_run→pending, excluded→not_applicable."
+      },
+      "evidence_status": {
+        "type": "string",
+        "enum": ["missing", "up_to_date", "outdated", "not_required", "due"],
+        "description": "Data values. Mapped to model values: up_to_date→submitted, not_required→submitted, due→due_soon."
+      },
+      "due_at": { "type": ["string", "null"], "format": "date" },
+      "trustcloud_id": { "type": "string", "format": "uuid" },
+      "test_type": { "type": "string", "enum": ["auto_assessment", "self_assessment"], "description": "Stored in other_data." },
+      "execution_status": { "type": ["string", "null"], "description": "Stored in other_data." },
+      "execution_outcome": { "type": ["string", "null"], "description": "Stored in other_data." },
+      "finding": { "type": ["string", "null"], "description": "Test finding text. Stored in other_data." },
+      "comment": { "type": ["string", "null"], "description": "Stored in other_data." },
+      "control_name": { "type": "string", "description": "Denormalized. Stored in other_data." },
+      "control_category": { "type": "string", "description": "Denormalized. Stored in other_data." },
+      "control_id_short": { "type": "string", "description": "Denormalized. Stored in other_data." },
+      "system": {
+        "type": ["object", "null"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "name": { "type": "string" },
+          "short_name": { "type": "string" }
+        },
+        "description": "System under test. Stored in other_data."
+      },
+      "owner": {
+        "type": "object",
+        "properties": {
+          "id": { "type": ["string", "null"], "format": "uuid" },
+          "name": { "type": "string" }
+        },
+        "description": "Test owner. Stored in other_data."
+      }
+    }
+  }
+}

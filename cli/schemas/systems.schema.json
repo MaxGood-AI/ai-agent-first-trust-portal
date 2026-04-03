@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Systems Data File",
+  "description": "System inventory. Array of system objects. Requires System model (not yet implemented).",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["id", "name"],
+    "properties": {
+      "id": { "type": "string", "format": "uuid" },
+      "name": { "type": "string" },
+      "short_name": { "type": "string", "description": "Kebab-case identifier" },
+      "purpose": { "type": "string" },
+      "risk_score": { "type": "number", "minimum": 0, "maximum": 100 },
+      "type": { "type": "array", "items": { "type": "string", "enum": ["application", "infrastructure"] } },
+      "group_name": { "type": "string" },
+      "provider": { "type": ["string", "null"] },
+      "data_classifications": {
+        "type": "array",
+        "items": { "type": "string", "enum": ["customer_confidential", "company_confidential", "company_restricted", "public"] }
+      },
+      "owner": {
+        "type": "object",
+        "properties": {
+          "id": { "type": ["string", "null"], "format": "uuid" },
+          "name": { "type": "string" }
+        }
+      },
+      "trustcloud_id": { "type": ["string", "null"], "format": "uuid" }
+    }
+  }
+}

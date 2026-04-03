@@ -6,6 +6,7 @@ services:
       - "5100:5100"
     volumes:
       - .:/app
+      - ${COMPLIANCE_DATA_DIR:-.}:/data
     env_file:
       - .env
     environment:

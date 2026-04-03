@@ -33,6 +33,9 @@ app/                  Flask application
   services/           Business logic (evidence engine, compliance scoring, transcript ingest, team CRUD)
   templates/          Jinja2 templates
   static/             CSS/JS assets
+cli/                  CLI tools (init command for loading compliance data)
+  loaders/            Data file loaders (one per entity type, with other_data preservation)
+  schemas/            JSON Schema documentation for each data file format
 collectors/           Automated evidence collection scripts (AWS, GitHub) — both optional
 decision-logs/        Session transcripts staged by SessionEnd hook (gitignored)
 migrations/           Alembic database migrations (auto-run on container startup)

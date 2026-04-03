@@ -110,6 +110,9 @@ app/                      Flask application
   services/               Business logic (compliance scoring, evidence recording, transcript ingest)
   templates/              Jinja2 templates
   static/                 CSS/JS assets
+cli/                      CLI tools
+  loaders/                Data file loaders (one per entity type)
+  schemas/                JSON Schema documentation for each data file format
 collectors/               Automated evidence collection scripts
   aws_collector.py        IAM MFA, RDS encryption/backups, security groups (requires AWS creds)
   github_collector.py     Branch protection, PR review evidence (requires GitHub token)
@@ -130,10 +133,53 @@ policies/                 Markdown policy documents by TSC category
 tests/                    Unit tests (pytest)
 ```
 
+## Loading Compliance Data
+
+The trust portal loads organization-specific data from an external directory via the `cli init` command. Your data directory should contain JSON files following the schemas in `cli/schemas/`.
+
+### Data Directory Structure
+
+```
+your-data-dir/
+├── controls.json              # SOC 2 controls
+├── tests.json                 # Test definitions linked to controls
+├── systems.json               # System inventory (requires System model)
+├── vendors.json               # Vendor inventory (requires Vendor model)
+├── policy-index.json          # Policy metadata
+├── risk-register.json         # Risk register (requires RiskRegister model)
+└── evidence/
+    └── evidence-index.json    # Evidence submission metadata
+```
+
+### Running the Init Command
+
+```bash
+# Development: set COMPLIANCE_DATA_DIR in .env, then:
+docker exec mgcompliance-dev python -m cli.init --data-dir /data
+
+# Or pass any path directly:
+docker exec mgcompliance-dev python -m cli.init --data-dir /path/to/data
+
+# Dry run (preview without writing):
+docker exec mgcompliance-dev python -m cli.init --data-dir /data --dry-run
+
+# Verbose output:
+docker exec mgcompliance-dev python -m cli.init --data-dir /data -v
+```
+
+The init command is **idempotent** — running it multiple times produces identical database state. Fields that don't map to model columns are preserved in each record's `other_data` JSON column, so no source data is ever discarded.
+
+### Configuration
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `COMPLIANCE_DATA_DIR` | Path to your data directory (for Docker volume mount) | (none — must be set explicitly) |
+
 ## Development
 
 ```bash
 cp .env.example .env
+# Set COMPLIANCE_DATA_DIR to point to your data directory
 docker compose -f docker-compose.dev.yml up --build
 ```
 

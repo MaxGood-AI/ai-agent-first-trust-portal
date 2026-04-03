@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Controls Data File",
+  "description": "SOC 2 controls. Array of control objects loaded by `cli init --data-dir`.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["id", "name", "tsc_category"],
+    "properties": {
+      "id": { "type": "string", "format": "uuid", "description": "Unique control identifier" },
+      "name": { "type": "string", "description": "Control name" },
+      "description": { "type": "string", "description": "Detailed control description" },
+      "category": { "type": "string", "description": "Organizational category (e.g., Cloud Infrastructure, People). Stored in other_data." },
+      "tsc_category": {
+        "type": "string",
+        "enum": ["security", "availability", "confidentiality", "privacy", "processing_integrity"],
+        "description": "SOC 2 Trust Service Category. Maps to model `category` column."
+      },
+      "state": { "type": "string", "default": "adopted", "description": "Adoption state" },
+      "trustcloud_id": { "type": "string", "format": "uuid", "description": "Legacy TrustCloud ID" },
+      "control_id_short": { "type": "string", "description": "Short identifier (e.g., INFRA-8). Stored in other_data." },
+      "frequency": { "type": "string", "enum": ["monthly", "quarterly", "annual"], "description": "Assessment frequency. Stored in other_data." },
+      "maturity_level": { "type": "integer", "minimum": 1, "maximum": 3, "description": "Implementation maturity. Stored in other_data." },
+      "group_name": { "type": "string", "description": "Ownership group. Stored in other_data." },
+      "soc2_references": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "referenceId": { "type": "string", "description": "SOC 2 reference (e.g., CC6.1)" },
+            "description": { "type": "string" }
+          }
+        },
+        "description": "SOC 2 criteria mappings. Stored in other_data."
+      },
+      "owner": {
+        "type": "object",
+        "properties": {
+          "id": { "type": ["string", "null"], "format": "uuid" },
+          "name": { "type": "string" }
+        },
+        "description": "Control owner. Stored in other_data."
+      }
+    }
+  }
+}

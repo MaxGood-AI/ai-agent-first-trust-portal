@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Evidence Index Data File",
+  "description": "Evidence submission metadata. Array loaded by `cli init --data-dir` from evidence/evidence-index.json.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["test_name", "evidence_type"],
+    "properties": {
+      "test_name": { "type": "string", "description": "Matched against TestRecord.name or Control.name to resolve test_record_id. Stored in other_data." },
+      "evidence_type": { "type": "string", "enum": ["link", "file", "screenshot", "automated"] },
+      "description": { "type": "string" },
+      "url": { "type": ["string", "null"] },
+      "file_path": { "type": ["string", "null"], "description": "Relative path within the data directory" },
+      "collected_at": { "type": "string", "format": "date-time" },
+      "collector_name": { "type": "string", "description": "Name of the collector that generated this evidence" }
+    }
+  }
+}

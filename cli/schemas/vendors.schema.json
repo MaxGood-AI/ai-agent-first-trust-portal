@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Vendors Data File",
+  "description": "Vendor inventory. Array of vendor objects. Requires Vendor model (not yet implemented).",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["id", "name"],
+    "properties": {
+      "id": { "type": "string", "format": "uuid" },
+      "name": { "type": "string" },
+      "status": { "type": "string", "enum": ["active", "inactive", "under_review"] },
+      "is_subprocessor": { "type": "boolean" },
+      "classification": { "type": "array", "items": { "type": "string" } },
+      "locations": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "label": { "type": "string" },
+            "value": { "type": "string" }
+          }
+        }
+      },
+      "group_name": { "type": "string" },
+      "purpose": { "type": "string" },
+      "website_url": { "type": "string", "format": "uri" },
+      "privacy_policy_url": { "type": "string", "format": "uri" },
+      "security_page_url": { "type": "string", "format": "uri" },
+      "tos_url": { "type": "string", "format": "uri" },
+      "certifications": { "type": "array", "items": { "type": "string" } },
+      "owner": {
+        "type": "object",
+        "properties": {
+          "id": { "type": ["string", "null"], "format": "uuid" },
+          "name": { "type": "string" }
+        }
+      },
+      "trustcloud_id": { "type": ["string", "null"], "format": "uuid" },
+      "system_ids": { "type": "array", "items": { "type": "string", "format": "uuid" }, "description": "FK references to systems" }
+    }
+  }
+}

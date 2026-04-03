@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Policy Index Data File",
+  "description": "Policy metadata. Array of policy objects loaded by `cli init --data-dir`.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["id", "title", "category"],
+    "properties": {
+      "id": { "type": "string", "format": "uuid" },
+      "title": { "type": "string" },
+      "short_name": { "type": "string", "description": "e.g., POL-1. Stored in other_data." },
+      "category": { "type": "string", "enum": ["security", "availability", "confidentiality", "privacy", "processing_integrity"] },
+      "security_group": { "type": "string", "description": "Stored in other_data." },
+      "version": { "type": "string", "default": "1.0" },
+      "file_path": { "type": "string", "description": "Relative path to the policy markdown file" },
+      "status": { "type": "string", "enum": ["draft", "pending_approval", "approved", "retired"] },
+      "approved_at": { "type": ["string", "null"], "format": "date" },
+      "approved_by": { "type": ["string", "null"] },
+      "next_review_at": { "type": ["string", "null"], "format": "date" },
+      "trustcloud_id": { "type": "string", "format": "uuid" },
+      "soc2_control_ids": {
+        "type": "array",
+        "items": { "type": "string", "format": "uuid" },
+        "description": "Control IDs this policy covers. Stored in other_data until join table exists."
+      },
+      "group_name": { "type": "string", "description": "Stored in other_data." },
+      "owner": {
+        "type": "object",
+        "properties": {
+          "id": { "type": ["string", "null"], "format": "uuid" },
+          "name": { "type": "string" }
+        },
+        "description": "Stored in other_data."
+      },
+      "notes": { "type": ["string", "null"], "description": "Stored in other_data." }
+    }
+  }
+}
