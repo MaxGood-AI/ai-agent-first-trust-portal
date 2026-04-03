@@ -8,7 +8,7 @@ import pytest
 
 from app import create_app
 from app.config import TestConfig
-from app.models import db, Control, TestRecord, Policy, Evidence
+from app.models import db, Control, System, TestRecord, Policy, Evidence
 
 
 @pytest.fixture
@@ -490,18 +490,141 @@ def test_load_evidence_other_data(app, data_dir):
         assert ev.other_data["extra_field"] == "should be in other_data"
 
 
-# --- Stub Loader Tests ---
+# --- Systems Loader Tests ---
 
 
-def test_skip_missing_table(app, data_dir):
-    """Systems loader warns and returns when table absent."""
+def test_load_systems(app, data_dir):
+    """Load systems and verify field mapping including type → system_type."""
     write_json(data_dir / "systems.json", [
-        {"id": "sys-1", "name": "RDS", "short_name": "rds"},
+        {
+            "id": "sys-001",
+            "name": "AWS Code Commit",
+            "short_name": "aws-code-commit",
+            "purpose": "Source Control",
+            "risk_score": 0.0,
+            "type": ["application"],
+            "group_name": "Engineering",
+            "provider": "AWS",
+            "data_classifications": ["company_restricted"],
+            "trustcloud_id": "tc-sys-1",
+        },
+        {
+            "id": "sys-002",
+            "name": "RDS",
+            "short_name": "rds",
+            "purpose": "Data Store",
+            "risk_score": 55.56,
+            "type": ["infrastructure"],
+            "provider": "AWS",
+            "data_classifications": ["customer_confidential", "company_restricted"],
+        },
     ])
 
     with app.app_context():
         from cli.loaders.systems import SystemsLoader
         result = SystemsLoader().load(str(data_dir))
+
+        assert result["inserted"] == 2
+
+        s1 = db.session.get(System, "sys-001")
+        assert s1.name == "AWS Code Commit"
+        assert s1.short_name == "aws-code-commit"
+        assert s1.purpose == "Source Control"
+        assert s1.risk_score == 0.0
+        assert s1.system_type == ["application"]  # type → system_type
+        assert s1.provider == "AWS"
+        assert s1.data_classifications == ["company_restricted"]
+        assert s1.group_name == "Engineering"
+
+        s2 = db.session.get(System, "sys-002")
+        assert s2.risk_score == 55.56
+        assert s2.data_classifications == ["customer_confidential", "company_restricted"]
+
+
+def test_load_systems_other_data(app, data_dir):
+    """Verify owner stored in other_data."""
+    write_json(data_dir / "systems.json", [{
+        "id": "sys-od",
+        "name": "Test System",
+        "type": ["application"],
+        "owner": {"id": "owner-1", "name": "Alice"},
+    }])
+
+    with app.app_context():
+        from cli.loaders.systems import SystemsLoader
+        SystemsLoader().load(str(data_dir))
+
+        s = db.session.get(System, "sys-od")
+        assert s.other_data["owner"]["name"] == "Alice"
+
+
+def test_load_tests_with_system_id(app, data_dir):
+    """Tests with system references get system_id FK populated."""
+    write_json(data_dir / "systems.json", [
+        {"id": "sys-fk", "name": "RDS", "type": ["infrastructure"]},
+    ])
+    write_json(data_dir / "controls.json", [
+        {"id": "ctrl-fk", "name": "Control", "tsc_category": "security"},
+    ])
+    write_json(data_dir / "tests.json", [{
+        "id": "test-fk",
+        "control_id": "ctrl-fk",
+        "name": "RDS Encryption",
+        "status": "success",
+        "evidence_status": "missing",
+        "system": {"id": "sys-fk", "name": "RDS", "short_name": "rds"},
+    }])
+
+    with app.app_context():
+        from cli.loaders.systems import SystemsLoader
+        from cli.loaders.controls import ControlsLoader
+        from cli.loaders.tests import TestsLoader
+        SystemsLoader().load(str(data_dir))
+        ControlsLoader().load(str(data_dir))
+        TestsLoader().load(str(data_dir))
+
+        t = db.session.get(TestRecord, "test-fk")
+        assert t.system_id == "sys-fk"
+        assert t.system.name == "RDS"
+        # The full system object should be in other_data too
+        assert t.other_data["system"]["name"] == "RDS"
+
+
+def test_load_tests_without_system(app, data_dir):
+    """Tests with null system load fine (system_id = None)."""
+    write_json(data_dir / "controls.json", [
+        {"id": "ctrl-ns", "name": "Control", "tsc_category": "security"},
+    ])
+    write_json(data_dir / "tests.json", [{
+        "id": "test-ns",
+        "control_id": "ctrl-ns",
+        "name": "No System Test",
+        "status": "not_run",
+        "evidence_status": "missing",
+    }])
+
+    with app.app_context():
+        from cli.loaders.controls import ControlsLoader
+        from cli.loaders.tests import TestsLoader
+        ControlsLoader().load(str(data_dir))
+        TestsLoader().load(str(data_dir))
+
+        t = db.session.get(TestRecord, "test-ns")
+        assert t.system_id is None
+
+
+# --- Stub Loader Tests ---
+
+
+def test_skip_missing_table(app, data_dir):
+    """Vendors loader warns and returns when table absent."""
+    write_json(data_dir / "vendors.json", [
+        {"id": "v-1", "name": "AWS"},
+    ])
+
+    with app.app_context():
+        from cli.loaders.vendors import VendorsLoader
+        result = VendorsLoader().load(str(data_dir))
         assert result["inserted"] == 0
         assert result["updated"] == 0
 
@@ -594,7 +717,8 @@ def test_full_init_run(app, data_dir):
             totals["skipped"] += result["skipped"]
 
         assert Control.query.count() == 1
+        assert System.query.count() == 1
         assert TestRecord.query.count() == 1
         assert Policy.query.count() == 1
         assert Evidence.query.count() == 1
-        assert totals["inserted"] == 4  # 1 control + 1 test + 1 policy + 1 evidence
+        assert totals["inserted"] == 5  # 1 control + 1 system + 1 test + 1 policy + 1 evidence

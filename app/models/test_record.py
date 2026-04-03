@@ -23,6 +23,7 @@ class TestRecord(db.Model):
     )
     last_executed_at = db.Column(db.DateTime)
     due_at = db.Column(db.DateTime)
+    system_id = db.Column(db.String(36), db.ForeignKey("systems.id"), nullable=True, comment="System under test")
     trustcloud_id = db.Column(db.String(36), comment="Original TrustCloud test ID")
     other_data = db.Column(db.JSON, server_default="{}", comment="Unmapped fields from data imports")
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))

@@ -14,6 +14,12 @@ class TestsLoader(BaseLoader):
 
     field_map = {}
 
+    # JSON `system` is a nested object {"id": "...", "name": "...", "short_name": "..."}.
+    # We extract system["id"] → system_id before _build_record runs.
+    nested_fk_extractions = {
+        "system": "system_id",  # extract system.id → system_id
+    }
+
     value_maps = {
         "status": {
             "success": "passed",
@@ -29,6 +35,16 @@ class TestsLoader(BaseLoader):
             "due": "due_soon",
         },
     }
+
+    def _build_record(self, item):
+        """Extract nested system object → system_id before standard build."""
+        # Make a mutable copy so we don't alter the original
+        item = dict(item)
+        for nested_key, fk_column in self.nested_fk_extractions.items():
+            nested_obj = item.get(nested_key)
+            if isinstance(nested_obj, dict) and "id" in nested_obj:
+                item[fk_column] = nested_obj["id"]
+        return super()._build_record(item)
 
     def _validate(self, item, record):
         """Ensure the referenced control exists."""

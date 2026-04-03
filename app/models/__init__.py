@@ -5,6 +5,7 @@ from flask_sqlalchemy import SQLAlchemy
 db = SQLAlchemy()
 
 from app.models.control import Control
+from app.models.system import System
 from app.models.policy import Policy
 from app.models.evidence import Evidence
 from app.models.test_record import TestRecord
@@ -13,6 +14,6 @@ from app.models.policy_version import PolicyVersion
 from app.models.team_member import TeamMember
 
 __all__ = [
-    "db", "Control", "Policy", "Evidence", "TestRecord",
+    "db", "Control", "System", "Policy", "Evidence", "TestRecord",
     "DecisionLogSession", "DecisionLogEntry", "PolicyVersion", "TeamMember",
 ]
