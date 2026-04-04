@@ -4,6 +4,12 @@ from datetime import datetime, timezone
 
 from app.models import db
 
+policy_controls = db.Table(
+    "policy_controls",
+    db.Column("policy_id", db.String(36), db.ForeignKey("policies.id"), primary_key=True),
+    db.Column("control_id", db.String(36), db.ForeignKey("controls.id"), primary_key=True),
+)
+
 
 class Policy(db.Model):
     __tablename__ = "policies"
@@ -31,6 +37,8 @@ class Policy(db.Model):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
+
+    controls = db.relationship("Control", secondary=policy_controls, backref="policies")
 
     def __repr__(self):
         return f"<Policy {self.title} v{self.version}>"

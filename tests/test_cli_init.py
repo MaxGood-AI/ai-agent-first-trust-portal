@@ -368,6 +368,59 @@ def test_load_policies_other_data(app, data_dir):
         assert od["notes"] == "Some notes"
 
 
+# --- Policy-Control M2M Tests ---
+
+
+def test_load_policies_control_ids(app, data_dir):
+    """Policies with soc2_control_ids get M2M links to controls."""
+    write_json(data_dir / "controls.json", [
+        {"id": "ctrl-pc1", "name": "MFA", "tsc_category": "security"},
+        {"id": "ctrl-pc2", "name": "Encryption", "tsc_category": "confidentiality"},
+    ])
+    write_json(data_dir / "policy-index.json", [{
+        "id": "pol-pc",
+        "title": "Auth Policy",
+        "category": "security",
+        "soc2_control_ids": ["ctrl-pc1", "ctrl-pc2"],
+    }])
+
+    with app.app_context():
+        from cli.loaders.controls import ControlsLoader
+        from cli.loaders.policies import PoliciesLoader
+        ControlsLoader().load(str(data_dir))
+        PoliciesLoader().load(str(data_dir))
+
+        p = db.session.get(Policy, "pol-pc")
+        assert len(p.controls) == 2
+        control_names = {c.name for c in p.controls}
+        assert control_names == {"MFA", "Encryption"}
+        # soc2_control_ids preserved in other_data
+        assert p.other_data["soc2_control_ids"] == ["ctrl-pc1", "ctrl-pc2"]
+
+        # Verify reverse: control.policies
+        c = db.session.get(Control, "ctrl-pc1")
+        assert len(c.policies) == 1
+        assert c.policies[0].title == "Auth Policy"
+
+
+def test_load_policies_missing_control_id(app, data_dir):
+    """Nonexistent control ID in soc2_control_ids is skipped gracefully."""
+    write_json(data_dir / "policy-index.json", [{
+        "id": "pol-miss",
+        "title": "Missing Control Policy",
+        "category": "security",
+        "soc2_control_ids": ["nonexistent-ctrl"],
+    }])
+
+    with app.app_context():
+        from cli.loaders.policies import PoliciesLoader
+        result = PoliciesLoader().load(str(data_dir))
+        assert result["inserted"] == 1
+
+        p = db.session.get(Policy, "pol-miss")
+        assert len(p.controls) == 0
+
+
 # --- Evidence Loader Tests ---
 
 
@@ -792,6 +845,7 @@ def test_full_init_run(app, data_dir):
         "title": "Full Policy",
         "category": "security",
         "status": "approved",
+        "soc2_control_ids": ["ctrl-full"],
     }])
     write_json(data_dir / "evidence" / "evidence-index.json", [{
         "test_name": "Full Test",
@@ -827,3 +881,6 @@ def test_full_init_run(app, data_dir):
         # Verify vendor M2M
         v = Vendor.query.first()
         assert len(v.systems) == 1
+        # Verify policy-control M2M
+        p = Policy.query.first()
+        assert len(p.controls) == 1
