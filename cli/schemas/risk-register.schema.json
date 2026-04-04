@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Risk Register Data File",
-  "description": "Risk register entries. Array of risk objects. Requires RiskRegister model (not yet implemented).",
+  "description": "Risk register entries. Array of risk objects loaded by `cli init --data-dir`.",
   "type": "array",
   "items": {
     "type": "object",

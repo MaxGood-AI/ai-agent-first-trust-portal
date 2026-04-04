@@ -1,20 +1,20 @@
-"""Stub loader for risk-register.json — skips until RiskRegister model exists."""
+"""Loader for risk-register.json → RiskRegister model."""
 
+from app.models import RiskRegister
 from cli.loaders.base import BaseLoader
 
 
 class RiskRegisterLoader(BaseLoader):
-    model_class = None
+    model_class = RiskRegister
     file_name = "risk-register.json"
+    field_map = {}
+    value_maps = {}
 
-    def load(self, data_dir, dry_run=False):
-        import logging
-        import os
-        logger = logging.getLogger(__name__)
-        path = os.path.join(data_dir, self.file_name)
-        if os.path.exists(path):
-            logger.warning(
-                "SKIP %s: no 'risk_register' table found in the database",
-                self.file_name,
-            )
-        return {"inserted": 0, "updated": 0, "skipped": 0}
+    def _build_record(self, item):
+        """Extract owner.id/owner.name from nested object before standard build."""
+        item = dict(item)
+        owner = item.get("owner")
+        if isinstance(owner, dict):
+            item["owner_id"] = owner.get("id")
+            item["owner_name"] = owner.get("name")
+        return super()._build_record(item)

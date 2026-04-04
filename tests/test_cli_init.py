@@ -8,7 +8,7 @@ import pytest
 
 from app import create_app
 from app.config import TestConfig
-from app.models import db, Control, System, Vendor, TestRecord, Policy, Evidence
+from app.models import db, Control, System, Vendor, TestRecord, Policy, Evidence, RiskRegister
 
 
 @pytest.fixture
@@ -784,16 +784,56 @@ def test_load_vendors_missing_system(app, data_dir):
 
 
 def test_skip_missing_table(app, data_dir):
-    """Risk register loader warns and returns when table absent."""
-    write_json(data_dir / "risk-register.json", [
-        {"id": "r-1", "name": "Test Risk"},
-    ])
+    """A loader with model_class=None skips gracefully."""
+    # All real models now have tables; test the base skip mechanism directly
+    from cli.loaders.base import BaseLoader
+
+    class FakeLoader(BaseLoader):
+        model_class = None
+        file_name = "fake.json"
+
+    write_json(data_dir / "fake.json", [{"id": "f-1", "name": "Fake"}])
+
+    with app.app_context():
+        result = FakeLoader().load(str(data_dir))
+        assert result["inserted"] == 0
+        assert result["updated"] == 0
+
+
+# --- Risk Register Loader Tests ---
+
+
+def test_load_risk_register(app, data_dir):
+    """Load risk register entries."""
+    write_json(data_dir / "risk-register.json", [{
+        "id": "risk-001",
+        "name": "Data Breach Risk",
+        "description": "Risk of unauthorized data access",
+        "likelihood": 3,
+        "impact": 5,
+        "risk_score": 15.0,
+        "treatment": "mitigate",
+        "treatment_plan": "Implement MFA and encryption",
+        "status": "open",
+        "owner": {"id": "own-1", "name": "Alice"},
+        "group_name": "Security",
+    }])
 
     with app.app_context():
         from cli.loaders.risk_register import RiskRegisterLoader
         result = RiskRegisterLoader().load(str(data_dir))
-        assert result["inserted"] == 0
-        assert result["updated"] == 0
+        assert result["inserted"] == 1
+
+        r = db.session.get(RiskRegister, "risk-001")
+        assert r.name == "Data Breach Risk"
+        assert r.likelihood == 3
+        assert r.impact == 5
+        assert r.risk_score == 15.0
+        assert r.treatment == "mitigate"
+        assert r.status == "open"
+        assert r.owner_id == "own-1"
+        assert r.owner_name == "Alice"
+        assert r.group_name == "Security"
 
 
 # --- Edge Case Tests ---
@@ -869,7 +909,7 @@ def test_full_init_run(app, data_dir):
     }])
     write_json(data_dir / "systems.json", [{"id": "s1", "name": "S1", "type": []}])
     write_json(data_dir / "vendors.json", [{"id": "v1", "name": "V1", "system_ids": ["s1"]}])
-    write_json(data_dir / "risk-register.json", [])
+    write_json(data_dir / "risk-register.json", [{"id": "r1", "name": "Risk 1"}])
 
     with app.app_context():
         from cli.init import run
@@ -890,7 +930,8 @@ def test_full_init_run(app, data_dir):
         assert Policy.query.count() == 1
         assert Vendor.query.count() == 1
         assert Evidence.query.count() == 1
-        assert totals["inserted"] == 6  # 1 control + 1 system + 1 test + 1 policy + 1 vendor + 1 evidence
+        assert RiskRegister.query.count() == 1
+        assert totals["inserted"] == 7  # 1 control + 1 system + 1 test + 1 policy + 1 vendor + 1 evidence + 1 risk
         # Verify vendor M2M
         v = Vendor.query.first()
         assert len(v.systems) == 1
