@@ -8,7 +8,7 @@ import pytest
 
 from app import create_app
 from app.config import TestConfig
-from app.models import db, Control, System, TestRecord, Policy, Evidence
+from app.models import db, Control, System, Vendor, TestRecord, Policy, Evidence
 
 
 @pytest.fixture
@@ -613,18 +613,119 @@ def test_load_tests_without_system(app, data_dir):
         assert t.system_id is None
 
 
-# --- Stub Loader Tests ---
+# --- Vendors Loader Tests ---
 
 
-def test_skip_missing_table(app, data_dir):
-    """Vendors loader warns and returns when table absent."""
+def test_load_vendors(app, data_dir):
+    """Load vendors and verify all fields."""
     write_json(data_dir / "vendors.json", [
-        {"id": "v-1", "name": "AWS"},
+        {
+            "id": "vnd-001",
+            "name": "Amazon Web Services",
+            "status": "active",
+            "is_subprocessor": True,
+            "classification": ["customer_confidential"],
+            "locations": [{"label": "Canada", "value": "CA"}],
+            "group_name": "DevOps",
+            "purpose": "Cloud hosting",
+            "website_url": "https://aws.amazon.com",
+            "privacy_policy_url": "https://aws.amazon.com/privacy",
+            "security_page_url": "https://aws.amazon.com/security",
+            "tos_url": "https://aws.amazon.com/terms",
+            "certifications": ["SOC 2", "ISO 27001"],
+            "trustcloud_id": "tc-vnd-1",
+        },
     ])
 
     with app.app_context():
         from cli.loaders.vendors import VendorsLoader
         result = VendorsLoader().load(str(data_dir))
+
+        assert result["inserted"] == 1
+
+        v = db.session.get(Vendor, "vnd-001")
+        assert v.name == "Amazon Web Services"
+        assert v.status == "active"
+        assert v.is_subprocessor is True
+        assert v.classification == ["customer_confidential"]
+        assert v.locations == [{"label": "Canada", "value": "CA"}]
+        assert v.group_name == "DevOps"
+        assert v.purpose == "Cloud hosting"
+        assert v.website_url == "https://aws.amazon.com"
+        assert v.certifications == ["SOC 2", "ISO 27001"]
+
+
+def test_load_vendors_other_data(app, data_dir):
+    """Verify owner stored in other_data."""
+    write_json(data_dir / "vendors.json", [{
+        "id": "vnd-od",
+        "name": "Test Vendor",
+        "owner": {"id": "owner-1", "name": "Alice"},
+    }])
+
+    with app.app_context():
+        from cli.loaders.vendors import VendorsLoader
+        VendorsLoader().load(str(data_dir))
+
+        v = db.session.get(Vendor, "vnd-od")
+        assert v.other_data["owner"]["name"] == "Alice"
+
+
+def test_load_vendors_system_ids(app, data_dir):
+    """Load systems first, then vendors with system_ids M2M."""
+    write_json(data_dir / "systems.json", [
+        {"id": "sys-m2m-1", "name": "RDS", "type": ["infrastructure"]},
+        {"id": "sys-m2m-2", "name": "S3", "type": ["infrastructure"]},
+    ])
+    write_json(data_dir / "vendors.json", [{
+        "id": "vnd-m2m",
+        "name": "AWS",
+        "system_ids": ["sys-m2m-1", "sys-m2m-2"],
+    }])
+
+    with app.app_context():
+        from cli.loaders.systems import SystemsLoader
+        from cli.loaders.vendors import VendorsLoader
+        SystemsLoader().load(str(data_dir))
+        VendorsLoader().load(str(data_dir))
+
+        v = db.session.get(Vendor, "vnd-m2m")
+        assert len(v.systems) == 2
+        system_names = {s.name for s in v.systems}
+        assert system_names == {"RDS", "S3"}
+        # system_ids also preserved in other_data
+        assert v.other_data["system_ids"] == ["sys-m2m-1", "sys-m2m-2"]
+
+
+def test_load_vendors_missing_system(app, data_dir):
+    """Vendor with nonexistent system_id links gracefully (skips that link)."""
+    write_json(data_dir / "vendors.json", [{
+        "id": "vnd-miss",
+        "name": "Vendor Missing Sys",
+        "system_ids": ["nonexistent-sys"],
+    }])
+
+    with app.app_context():
+        from cli.loaders.vendors import VendorsLoader
+        result = VendorsLoader().load(str(data_dir))
+        assert result["inserted"] == 1
+
+        v = db.session.get(Vendor, "vnd-miss")
+        assert len(v.systems) == 0  # no valid systems linked
+
+
+# --- Stub Loader Tests ---
+
+
+def test_skip_missing_table(app, data_dir):
+    """Risk register loader warns and returns when table absent."""
+    write_json(data_dir / "risk-register.json", [
+        {"id": "r-1", "name": "Test Risk"},
+    ])
+
+    with app.app_context():
+        from cli.loaders.risk_register import RiskRegisterLoader
+        result = RiskRegisterLoader().load(str(data_dir))
         assert result["inserted"] == 0
         assert result["updated"] == 0
 
@@ -699,8 +800,8 @@ def test_full_init_run(app, data_dir):
         "collected_at": "2026-01-01T00:00:00+00:00",
         "collector_name": "full-test",
     }])
-    write_json(data_dir / "systems.json", [{"id": "s1", "name": "S1"}])
-    write_json(data_dir / "vendors.json", [{"id": "v1", "name": "V1"}])
+    write_json(data_dir / "systems.json", [{"id": "s1", "name": "S1", "type": []}])
+    write_json(data_dir / "vendors.json", [{"id": "v1", "name": "V1", "system_ids": ["s1"]}])
     write_json(data_dir / "risk-register.json", [])
 
     with app.app_context():
@@ -720,5 +821,9 @@ def test_full_init_run(app, data_dir):
         assert System.query.count() == 1
         assert TestRecord.query.count() == 1
         assert Policy.query.count() == 1
+        assert Vendor.query.count() == 1
         assert Evidence.query.count() == 1
-        assert totals["inserted"] == 5  # 1 control + 1 system + 1 test + 1 policy + 1 evidence
+        assert totals["inserted"] == 6  # 1 control + 1 system + 1 test + 1 policy + 1 vendor + 1 evidence
+        # Verify vendor M2M
+        v = Vendor.query.first()
+        assert len(v.systems) == 1

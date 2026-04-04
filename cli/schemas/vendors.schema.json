@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Vendors Data File",
-  "description": "Vendor inventory. Array of vendor objects. Requires Vendor model (not yet implemented).",
+  "description": "Vendor inventory. Array of vendor objects loaded by `cli init --data-dir`.",
   "type": "array",
   "items": {
     "type": "object",
