@@ -1,8 +1,15 @@
 """Public trust portal routes — client-facing compliance status."""
 
-from flask import Blueprint, render_template, current_app
+import logging
+import os
+
+import markdown
+from flask import Blueprint, render_template, current_app, abort
+from markupsafe import Markup
 
 from app.models import db, Control, Policy, TestRecord
+
+logger = logging.getLogger(__name__)
 
 portal_bp = Blueprint("portal", __name__)
 
@@ -52,6 +59,40 @@ def policies():
     return render_template(
         "portal/policies.html",
         policies=approved_policies,
+        brand_name=current_app.config["PORTAL_BRAND_NAME"],
+    )
+
+
+@portal_bp.route("/policies/<policy_id>")
+def policy_detail(policy_id):
+    """Display a single policy with rendered markdown content."""
+    policy = db.session.get(Policy, policy_id)
+    if not policy:
+        abort(404)
+
+    html_content = None
+    if policy.file_path:
+        policy_dir = current_app.config.get("POLICY_DIR", "")
+        if policy_dir:
+            full_path = os.path.join(policy_dir, os.path.basename(policy.file_path))
+        else:
+            full_path = policy.file_path
+
+        if os.path.exists(full_path):
+            try:
+                import frontmatter
+                post = frontmatter.load(full_path)
+                html_content = Markup(markdown.markdown(
+                    post.content,
+                    extensions=["tables", "fenced_code", "toc"],
+                ))
+            except Exception:
+                logger.warning("Could not render policy file: %s", full_path)
+
+    return render_template(
+        "portal/policy_detail.html",
+        policy=policy,
+        html_content=html_content,
         brand_name=current_app.config["PORTAL_BRAND_NAME"],
     )
 

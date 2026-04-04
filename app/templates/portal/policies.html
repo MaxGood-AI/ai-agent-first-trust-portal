@@ -19,7 +19,7 @@
     <tbody>
         {% for policy in policies %}
         <tr>
-            <td>{{ policy.title }}</td>
+            <td><a href="{{ url_for('portal.policy_detail', policy_id=policy.id) }}">{{ policy.title }}</a></td>
             <td>{{ policy.category|replace('_', ' ')|title }}</td>
             <td>{{ policy.version }}</td>
             <td>{{ policy.approved_at.strftime('%Y-%m-%d') if policy.approved_at else '—' }}</td>

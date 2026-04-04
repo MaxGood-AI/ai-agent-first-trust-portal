@@ -4,7 +4,7 @@ import pytest
 
 from app import create_app
 from app.config import TestConfig
-from app.models import db
+from app.models import db, Policy
 from app.services import team_service
 
 
@@ -56,6 +56,22 @@ def test_portal_status(client):
     resp = client.get("/status")
     assert resp.status_code == 200
     assert b"Compliance Status" in resp.data
+
+
+def test_portal_policy_detail(app_ctx, client):
+    with app_ctx.app_context():
+        p = Policy(id="pol-detail", title="Test Policy", category="security", status="approved")
+        db.session.add(p)
+        db.session.commit()
+
+    resp = client.get("/policies/pol-detail")
+    assert resp.status_code == 200
+    assert b"Test Policy" in resp.data
+
+
+def test_portal_policy_detail_404(client):
+    resp = client.get("/policies/nonexistent")
+    assert resp.status_code == 404
 
 
 # --- Public API routes (no auth) ---

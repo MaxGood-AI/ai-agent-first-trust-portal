@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}{{ policy.title }}{% endblock %}
+
+{% block content %}
+<h1>{{ policy.title }}</h1>
+
+<table>
+    <tr><th>Category</th><td>{{ policy.category|replace('_', ' ')|title }}</td></tr>
+    <tr><th>Version</th><td>{{ policy.version }}</td></tr>
+    <tr><th>Status</th><td>{{ policy.status|replace('_', ' ')|title }}</td></tr>
+    {% if policy.approved_at %}
+    <tr><th>Approved</th><td>{{ policy.approved_at.strftime('%Y-%m-%d') }} by {{ policy.approved_by or '—' }}</td></tr>
+    {% endif %}
+    {% if policy.effective_date %}
+    <tr><th>Effective</th><td>{{ policy.effective_date.strftime('%Y-%m-%d') }}</td></tr>
+    {% endif %}
+    {% if policy.next_review_at %}
+    <tr><th>Next Review</th><td>{{ policy.next_review_at.strftime('%Y-%m-%d') }}</td></tr>
+    {% endif %}
+    {% if policy.short_name %}
+    <tr><th>ID</th><td>{{ policy.short_name }}</td></tr>
+    {% endif %}
+</table>
+
+{% if policy.controls %}
+<h2>Linked Controls</h2>
+<ul>
+    {% for control in policy.controls %}
+    <li>{{ control.control_id_short or '' }} {{ control.name }}</li>
+    {% endfor %}
+</ul>
+{% endif %}
+
+{% if html_content %}
+<div class="policy-content">
+    {{ html_content }}
+</div>
+{% else %}
+<p>Policy document content is not available for online viewing.</p>
+{% endif %}
+
+<p><a href="{{ url_for('portal.policies') }}">&larr; Back to Policy Library</a></p>
+{% endblock %}

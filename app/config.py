@@ -17,6 +17,7 @@ class Config:
     PORTAL_COMPANY_NAME = os.environ.get("PORTAL_COMPANY_NAME", "Your Company")
     PORTAL_BRAND_NAME = os.environ.get("PORTAL_BRAND_NAME", "Your Brand")
     PORTAL_CONTACT_EMAIL = os.environ.get("PORTAL_CONTACT_EMAIL", "compliance@example.com")
+    POLICY_DIR = os.environ.get("POLICY_DIR", "")
 
     SWAGGER = {
         "title": "MGCompliance API",

@@ -17,6 +17,10 @@ boto3==1.36.14
 # HTTP client (GitHub evidence collection)
 requests==2.32.3
 
+# Policy content rendering
+Markdown==3.7
+python-frontmatter==1.1.0
+
 # Environment
 python-dotenv==1.0.1
 
