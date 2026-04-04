@@ -37,13 +37,21 @@ class TestsLoader(BaseLoader):
     }
 
     def _build_record(self, item):
-        """Extract nested system object → system_id before standard build."""
-        # Make a mutable copy so we don't alter the original
+        """Extract nested objects before standard build."""
         item = dict(item)
+
+        # Extract system.id → system_id
         for nested_key, fk_column in self.nested_fk_extractions.items():
             nested_obj = item.get(nested_key)
             if isinstance(nested_obj, dict) and "id" in nested_obj:
                 item[fk_column] = nested_obj["id"]
+
+        # Extract owner.id/owner.name
+        owner = item.get("owner")
+        if isinstance(owner, dict):
+            item["owner_id"] = owner.get("id")
+            item["owner_name"] = owner.get("name")
+
         return super()._build_record(item)
 
     def _validate(self, item, record):

@@ -75,8 +75,8 @@ def test_load_controls(app, data_dir):
         assert c2.category == "availability"
 
 
-def test_load_controls_other_data(app, data_dir):
-    """Verify unmapped fields are stored in other_data."""
+def test_load_controls_expanded_fields(app, data_dir):
+    """Verify expanded fields are stored in proper columns, not other_data."""
     write_json(data_dir / "controls.json", [{
         "id": "ctrl-003",
         "name": "Host Hardening",
@@ -96,14 +96,16 @@ def test_load_controls_other_data(app, data_dir):
 
         c = db.session.get(Control, "ctrl-003")
         assert c.category == "security"
-        od = c.other_data
-        assert od["category"] == "Cloud Infrastructure"
-        assert od["control_id_short"] == "INFRA-8"
-        assert od["frequency"] == "annual"
-        assert od["maturity_level"] == 2
-        assert od["group_name"] == "DevOps"
-        assert od["soc2_references"][0]["referenceId"] == "CC6.1"
-        assert od["owner"]["name"] == "Alice"
+        assert c.source_category == "Cloud Infrastructure"
+        assert c.control_id_short == "INFRA-8"
+        assert c.frequency == "annual"
+        assert c.maturity_level == 2
+        assert c.group_name == "DevOps"
+        assert c.soc2_references[0]["referenceId"] == "CC6.1"
+        assert c.owner_id == "owner-1"
+        assert c.owner_name == "Alice"
+        # owner object still in other_data (nested object preserved)
+        assert c.other_data.get("owner", {}).get("name") == "Alice"
 
 
 def test_idempotent_rerun(app, data_dir):
@@ -125,7 +127,7 @@ def test_idempotent_rerun(app, data_dir):
 
 
 def test_idempotent_other_data_update(app, data_dir):
-    """Changing a field in JSON and re-running updates other_data."""
+    """Changing a field in JSON and re-running updates the column."""
     write_json(data_dir / "controls.json", [
         {"id": "ctrl-upd", "name": "Updatable", "tsc_category": "security", "frequency": "annual"},
     ])
@@ -134,7 +136,7 @@ def test_idempotent_other_data_update(app, data_dir):
         from cli.loaders.controls import ControlsLoader
         loader = ControlsLoader()
         loader.load(str(data_dir))
-        assert db.session.get(Control, "ctrl-upd").other_data["frequency"] == "annual"
+        assert db.session.get(Control, "ctrl-upd").frequency == "annual"
 
     write_json(data_dir / "controls.json", [
         {"id": "ctrl-upd", "name": "Updatable", "tsc_category": "security", "frequency": "quarterly"},
@@ -142,7 +144,7 @@ def test_idempotent_other_data_update(app, data_dir):
 
     with app.app_context():
         loader.load(str(data_dir))
-        assert db.session.get(Control, "ctrl-upd").other_data["frequency"] == "quarterly"
+        assert db.session.get(Control, "ctrl-upd").frequency == "quarterly"
 
 
 # --- Tests Loader Tests ---
@@ -256,20 +258,22 @@ def test_load_tests_with_evidence_status_mapping(app, data_dir):
             assert t.evidence_status == expected_es
 
 
-def test_load_tests_other_data(app, data_dir):
-    """Verify unmapped fields in other_data."""
+def test_load_tests_expanded_fields(app, data_dir):
+    """Verify expanded fields in proper columns."""
     write_json(data_dir / "controls.json", [
         {"id": "ctrl-tod", "name": "Control", "tsc_category": "security"},
     ])
     write_json(data_dir / "tests.json", [{
         "id": "test-tod",
         "control_id": "ctrl-tod",
-        "name": "Test Other Data",
+        "name": "Test Expanded Fields",
         "status": "success",
         "evidence_status": "missing",
         "test_type": "auto_assessment",
+        "execution_status": "completed",
         "execution_outcome": "failure",
         "finding": "Something was wrong",
+        "comment": "Needs attention",
         "system": {"id": "sys-1", "name": "RDS", "short_name": "rds"},
         "owner": {"id": "owner-1", "name": "Bob"},
         "control_name": "Control",
@@ -283,12 +287,17 @@ def test_load_tests_other_data(app, data_dir):
         TestsLoader().load(str(data_dir))
 
         t = db.session.get(TestRecord, "test-tod")
-        od = t.other_data
-        assert od["test_type"] == "auto_assessment"
-        assert od["execution_outcome"] == "failure"
-        assert od["finding"] == "Something was wrong"
-        assert od["system"]["name"] == "RDS"
-        assert od["owner"]["name"] == "Bob"
+        assert t.test_type == "auto_assessment"
+        assert t.execution_status == "completed"
+        assert t.execution_outcome == "failure"
+        assert t.finding == "Something was wrong"
+        assert t.comment == "Needs attention"
+        assert t.owner_id == "owner-1"
+        assert t.owner_name == "Bob"
+        # Denormalized fields still in other_data
+        assert t.other_data["control_name"] == "Control"
+        # Nested system object in other_data
+        assert t.other_data["system"]["name"] == "RDS"
 
 
 def test_load_tests_missing_control(app, data_dir):
@@ -341,8 +350,8 @@ def test_load_policies(app, data_dir):
         assert p.next_review_at.year == 2027
 
 
-def test_load_policies_other_data(app, data_dir):
-    """Verify unmapped fields in other_data."""
+def test_load_policies_expanded_fields(app, data_dir):
+    """Verify expanded fields in proper columns."""
     write_json(data_dir / "policy-index.json", [{
         "id": "pol-od",
         "title": "Test Policy",
@@ -351,8 +360,9 @@ def test_load_policies_other_data(app, data_dir):
         "security_group": "Security Operations",
         "soc2_control_ids": ["ctrl-a", "ctrl-b"],
         "group_name": "Engineering",
-        "owner": {"id": None, "name": "Admin"},
+        "owner": {"id": "own-1", "name": "Admin"},
         "notes": "Some notes",
+        "effective_date": "2026-03-25",
     }])
 
     with app.app_context():
@@ -360,12 +370,15 @@ def test_load_policies_other_data(app, data_dir):
         PoliciesLoader().load(str(data_dir))
 
         p = db.session.get(Policy, "pol-od")
-        od = p.other_data
-        assert od["short_name"] == "POL-1"
-        assert od["security_group"] == "Security Operations"
-        assert od["soc2_control_ids"] == ["ctrl-a", "ctrl-b"]
-        assert od["owner"]["name"] == "Admin"
-        assert od["notes"] == "Some notes"
+        assert p.short_name == "POL-1"
+        assert p.security_group == "Security Operations"
+        assert p.group_name == "Engineering"
+        assert p.owner_id == "own-1"
+        assert p.owner_name == "Admin"
+        assert p.notes == "Some notes"
+        assert p.effective_date.year == 2026
+        # soc2_control_ids still in other_data (M2M handled separately)
+        assert p.other_data["soc2_control_ids"] == ["ctrl-a", "ctrl-b"]
 
 
 # --- Policy-Control M2M Tests ---

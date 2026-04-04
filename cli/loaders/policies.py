@@ -14,6 +14,15 @@ class PoliciesLoader(BaseLoader):
     field_map = {}
     value_maps = {}
 
+    def _build_record(self, item):
+        """Extract owner.id/owner.name from nested object before standard build."""
+        item = dict(item)
+        owner = item.get("owner")
+        if isinstance(owner, dict):
+            item["owner_id"] = owner.get("id")
+            item["owner_name"] = owner.get("name")
+        return super()._build_record(item)
+
     def load(self, data_dir, dry_run=False):
         """Load policies, then sync soc2_control_ids M2M from other_data."""
         from app.models import db
