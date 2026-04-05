@@ -32,7 +32,7 @@ def health():
                   example: ok
                 service:
                   type: string
-                  example: mgcompliance
+                  example: trust-portal
                 database:
                   type: string
                   example: connected
@@ -41,10 +41,10 @@ def health():
     """
     try:
         db.session.execute(db.text("SELECT 1"))
-        return jsonify({"status": "ok", "service": "mgcompliance", "database": "connected"})
+        return jsonify({"status": "ok", "service": "trust-portal", "database": "connected"})
     except Exception:
         logger.warning("Health check: database unreachable")
-        return jsonify({"status": "degraded", "service": "mgcompliance", "database": "unreachable"}), 503
+        return jsonify({"status": "degraded", "service": "trust-portal", "database": "unreachable"}), 503
 
 
 @api_bp.route("/compliance-score")
@@ -404,6 +404,138 @@ def get_session(session_id):
             "is_verification": e.is_verification,
         } for e in entries],
     })
+
+
+@api_bp.route("/audit-log")
+@require_api_key
+def audit_log():
+    """Query the audit log for compliance data changes.
+    ---
+    tags:
+      - Audit
+    security:
+      - ApiKeyAuth: []
+    parameters:
+      - name: table
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Filter by table name (e.g., controls, policies)
+      - name: record_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Filter by record ID
+      - name: action
+        in: query
+        required: false
+        schema:
+          type: string
+          enum: [INSERT, UPDATE, DELETE]
+        description: Filter by action type
+      - name: changed_by
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Filter by team member ID
+      - name: since
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+        description: Only return entries after this timestamp
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 50
+          maximum: 200
+        description: Maximum number of entries to return
+    responses:
+      200:
+        description: List of audit log entries
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                  table_name:
+                    type: string
+                  record_id:
+                    type: string
+                  action:
+                    type: string
+                  old_values:
+                    type: object
+                  new_values:
+                    type: object
+                  changed_by:
+                    type: string
+                  changed_at:
+                    type: string
+                    format: date-time
+      401:
+        description: Missing or invalid API key
+    """
+    from app.models.audit_log import AuditLog
+
+    query = AuditLog.query
+
+    table_filter = request.args.get("table")
+    if table_filter:
+        query = query.filter_by(table_name=table_filter)
+
+    record_id = request.args.get("record_id")
+    if record_id:
+        query = query.filter_by(record_id=record_id)
+
+    action = request.args.get("action")
+    if action:
+        query = query.filter_by(action=action.upper())
+
+    changed_by = request.args.get("changed_by")
+    if changed_by:
+        query = query.filter_by(changed_by=changed_by)
+
+    since = request.args.get("since")
+    if since:
+        from datetime import datetime
+        try:
+            since_dt = datetime.fromisoformat(since)
+            query = query.filter(AuditLog.changed_at >= since_dt)
+        except ValueError:
+            pass
+
+    limit = min(int(request.args.get("limit", 50)), 200)
+    entries = query.order_by(AuditLog.changed_at.desc()).limit(limit).all()
+
+    from app.models.team_member import TeamMember
+    member_ids = {e.changed_by for e in entries if e.changed_by}
+    members = {}
+    if member_ids:
+        for m in TeamMember.query.filter(TeamMember.id.in_(member_ids)).all():
+            members[m.id] = m.name
+
+    return jsonify([{
+        "id": e.id,
+        "table_name": e.table_name,
+        "record_id": e.record_id,
+        "action": e.action,
+        "old_values": e.old_values,
+        "new_values": e.new_values,
+        "changed_by": e.changed_by,
+        "changed_by_name": members.get(e.changed_by) if e.changed_by else None,
+        "changed_at": e.changed_at.isoformat() if e.changed_at else None,
+    } for e in entries])
 
 
 @api_bp.route("/openapi.json")

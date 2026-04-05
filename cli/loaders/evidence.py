@@ -17,13 +17,15 @@ class EvidenceLoader(BaseLoader):
     field_map = {}
     value_maps = {}
 
-    def _resolve_test_record_id(self, test_name):
-        """Resolve a test_name string to a test_record_id.
+    def _resolve_test_record_id(self, test_name, control_name=None):
+        """Resolve a test_name (or control_name) to a test_record_id.
 
         Strategy:
-        1. Exact match on TestRecord.name
-        2. Match on Control.name, then use its first test
-        3. None if no match found
+        1. Exact match on TestRecord.name using test_name
+        2. Match on Control.name using test_name, then use its first test
+        3. If control_name provided and differs from test_name:
+           exact match on Control.name using control_name, then first test
+        4. None if no match found
         """
         test = TestRecord.query.filter_by(name=test_name).first()
         if test:
@@ -35,6 +37,13 @@ class EvidenceLoader(BaseLoader):
             if test:
                 return test.id
 
+        if control_name and control_name != test_name:
+            control = Control.query.filter_by(name=control_name).first()
+            if control:
+                test = TestRecord.query.filter_by(control_id=control.id).first()
+                if test:
+                    return test.id
+
         return None
 
     def _build_record(self, item):
@@ -42,6 +51,7 @@ class EvidenceLoader(BaseLoader):
         columns = self._get_model_columns()
 
         test_name = item.get("test_name", "")
+        control_name = item.get("control_name")
         file_path = item.get("file_path", "")
         collected_at = item.get("collected_at", "")
 
@@ -52,11 +62,12 @@ class EvidenceLoader(BaseLoader):
         ))
 
         # Resolve FK
-        test_record_id = self._resolve_test_record_id(test_name)
+        test_record_id = self._resolve_test_record_id(test_name, control_name)
         if test_record_id is None:
             logger.warning(
-                "  Skipping evidence: no test or control matches test_name='%s'",
+                "  Skipping evidence: no match for test_name='%s'%s",
                 test_name,
+                f", control_name='{control_name}'" if control_name else "",
             )
             return None
 
@@ -66,7 +77,7 @@ class EvidenceLoader(BaseLoader):
         for json_key, value in item.items():
             col_name = self._apply_field_map(json_key)
 
-            if col_name in ("test_name",):
+            if col_name in ("test_name", "control_name"):
                 # Always goes to other_data for reference
                 other_data[json_key] = value
                 continue

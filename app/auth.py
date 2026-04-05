@@ -1,4 +1,4 @@
-"""API key authentication for MGCompliance."""
+"""API key authentication for the trust portal."""
 
 import functools
 

@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Admin — Audit Log{% endblock %}
+
+{% block content %}
+<h1>Audit Log</h1>
+<p><a href="{{ url_for('admin.dashboard') }}">&larr; Back to Dashboard</a></p>
+
+<form method="get" action="{{ url_for('admin.admin_audit_log') }}" style="margin-bottom: 1rem; display: flex; gap: 0.5rem; align-items: end; flex-wrap: wrap;">
+    <label>Table:
+        <select name="table">
+            <option value="">All</option>
+            {% for t in audited_tables %}
+            <option value="{{ t }}" {% if t == current_table %}selected{% endif %}>{{ t }}</option>
+            {% endfor %}
+        </select>
+    </label>
+    <label>Record ID:
+        <input type="text" name="record_id" value="{{ current_record_id }}" placeholder="UUID" size="20">
+    </label>
+    <label>Action:
+        <select name="action">
+            <option value="">All</option>
+            <option value="INSERT" {% if current_action == 'INSERT' %}selected{% endif %}>INSERT</option>
+            <option value="UPDATE" {% if current_action == 'UPDATE' %}selected{% endif %}>UPDATE</option>
+            <option value="DELETE" {% if current_action == 'DELETE' %}selected{% endif %}>DELETE</option>
+        </select>
+    </label>
+    <button type="submit">Filter</button>
+</form>
+
+{% if entries %}
+<p>Showing {{ entries|length }} entries (page {{ pagination.page }} of {{ pagination.pages }})</p>
+<table>
+    <thead>
+        <tr>
+            <th>Timestamp</th>
+            <th>Table</th>
+            <th>Record ID</th>
+            <th>Action</th>
+            <th>Changed By</th>
+            <th>Details</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for e in entries %}
+        <tr>
+            <td>{{ e.changed_at.strftime('%Y-%m-%d %H:%M:%S') if e.changed_at else '' }}</td>
+            <td>{{ e.table_name }}</td>
+            <td title="{{ e.record_id }}">{{ e.record_id[:8] }}&hellip;</td>
+            <td>{{ e.action }}</td>
+            <td title="{{ e.changed_by or '' }}">{{ members.get(e.changed_by, 'system') if e.changed_by else 'system' }}</td>
+            <td>
+                <details>
+                    <summary>View</summary>
+                    {% if e.old_values %}
+                    <strong>Old:</strong>
+                    <pre style="max-width: 400px; overflow-x: auto; font-size: 0.8em;">{{ e.old_values | tojson(indent=2) }}</pre>
+                    {% endif %}
+                    {% if e.new_values %}
+                    <strong>New:</strong>
+                    <pre style="max-width: 400px; overflow-x: auto; font-size: 0.8em;">{{ e.new_values | tojson(indent=2) }}</pre>
+                    {% endif %}
+                </details>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<div style="margin-top: 1rem;">
+    {% if pagination.has_prev %}
+    <a href="{{ url_for('admin.admin_audit_log', page=pagination.prev_num, table=current_table, record_id=current_record_id, action=current_action) }}">&larr; Previous</a>
+    {% endif %}
+    {% if pagination.has_next %}
+    <a href="{{ url_for('admin.admin_audit_log', page=pagination.next_num, table=current_table, record_id=current_record_id, action=current_action) }}">Next &rarr;</a>
+    {% endif %}
+</div>
+{% else %}
+<p>No audit log entries found.</p>
+{% endif %}
+{% endblock %}

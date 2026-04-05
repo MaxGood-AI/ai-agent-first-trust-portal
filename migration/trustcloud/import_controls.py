@@ -30,7 +30,9 @@ CATEGORY_KEYWORDS = {
         "confidential", "data in transit", "encryption documentation",
     ],
     "privacy": [
-        "privacy", "gdpr", "personal", "data subject",
+        "privacy", "gdpr", "pipeda", "personal data", "pii", "data subject",
+        "consent", "data protection", "breach notification",
+        "subprocessor", "cross-border", "data transfer",
     ],
     "processing_integrity": [
         "change management", "release", "deployment", "sdlc", "code review",

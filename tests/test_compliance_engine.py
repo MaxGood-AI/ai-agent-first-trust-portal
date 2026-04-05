@@ -105,3 +105,45 @@ def test_compliance_summary(app, seed_data):
         assert summary["evidence_gaps"] == 1
         assert summary["categories"]["security"] == 66.7
         assert summary["categories"]["availability"] == 100.0
+
+
+def test_category_score_privacy_with_controls(app):
+    """Privacy controls score correctly when data exists."""
+    with app.app_context():
+        ctrl = Control(id="priv-ctrl-1", name="Privacy Notice", category="privacy", state="adopted")
+        db.session.add(ctrl)
+        for i, status in enumerate(["passed", "pending"]):
+            tr = TestRecord(
+                id=f"priv-test-{i}",
+                control_id="priv-ctrl-1",
+                name=f"Privacy test {i}",
+                status=status,
+                evidence_status="submitted" if status == "passed" else "missing",
+            )
+            db.session.add(tr)
+        db.session.commit()
+
+        score = calculate_category_score("privacy")
+        assert score == 50.0  # 1 passed / 2 total
+
+
+def test_compliance_summary_includes_privacy(app):
+    """Privacy category appears in summary when controls exist."""
+    with app.app_context():
+        for cat in ["security", "availability", "confidentiality", "privacy", "processing_integrity"]:
+            ctrl = Control(id=f"sum-{cat}", name=f"{cat} control", category=cat, state="adopted")
+            db.session.add(ctrl)
+            tr = TestRecord(
+                id=f"sum-test-{cat}",
+                control_id=f"sum-{cat}",
+                name=f"{cat} test",
+                status="passed",
+                evidence_status="submitted",
+            )
+            db.session.add(tr)
+        db.session.commit()
+
+        summary = get_compliance_summary()
+        assert "privacy" in summary["categories"]
+        assert summary["categories"]["privacy"] == 100.0
+        assert summary["total_controls"] == 5

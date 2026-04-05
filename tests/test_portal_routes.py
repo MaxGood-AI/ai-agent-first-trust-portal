@@ -4,7 +4,7 @@ import pytest
 
 from app import create_app
 from app.config import TestConfig
-from app.models import db, Control, Policy
+from app.models import db, Control, Policy, TestRecord
 from app.services import team_service
 
 
@@ -115,7 +115,7 @@ def test_api_health(client):
     assert resp.status_code == 200
     data = resp.get_json()
     assert data["status"] == "ok"
-    assert data["service"] == "mgcompliance"
+    assert data["service"] == "trust-portal"
     assert data["database"] == "connected"
 
 
@@ -149,3 +149,35 @@ def test_api_decision_log_sessions_empty(client, member):
     resp = client.get("/api/decision-log/sessions", headers=_auth(member))
     assert resp.status_code == 200
     assert resp.get_json() == []
+
+
+def test_portal_index_shows_privacy_category(app_ctx, client):
+    """Privacy category appears on home page when privacy controls exist."""
+    with app_ctx.app_context():
+        ctrl = Control(id="priv-portal", name="Privacy Control", category="privacy", state="adopted")
+        db.session.add(ctrl)
+        tr = TestRecord(id="priv-portal-t", control_id="priv-portal", name="Privacy Test",
+                        status="passed", evidence_status="submitted")
+        db.session.add(tr)
+        db.session.commit()
+
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert b"privacy" in resp.data
+
+
+def test_status_page_shows_control_id(app_ctx, client):
+    """Status page should display control_id_short alongside control name."""
+    with app_ctx.app_context():
+        ctrl = Control(id="ctrl-status-id", name="MFA Enforcement",
+                       category="security", state="adopted",
+                       control_id_short="SEC-42")
+        db.session.add(ctrl)
+        tr = TestRecord(id="test-status-id", control_id="ctrl-status-id",
+                        name="MFA Test", status="passed", evidence_status="submitted")
+        db.session.add(tr)
+        db.session.commit()
+
+    resp = client.get("/status")
+    assert resp.status_code == 200
+    assert b"SEC-42" in resp.data

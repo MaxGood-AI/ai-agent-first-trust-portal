@@ -299,3 +299,54 @@ def admin_risks_create():
 @require_admin
 def admin_risks_delete(item_id):
     return _admin_entity_delete(RiskRegister, item_id, "admin.admin_risks")
+
+
+@admin_bp.route("/audit-log")
+@require_api_key
+@require_admin
+def admin_audit_log():
+    from app.models.audit_log import AuditLog
+
+    query = AuditLog.query
+
+    table_filter = request.args.get("table")
+    if table_filter:
+        query = query.filter_by(table_name=table_filter)
+
+    record_id = request.args.get("record_id")
+    if record_id:
+        query = query.filter_by(record_id=record_id)
+
+    action_filter = request.args.get("action")
+    if action_filter:
+        query = query.filter_by(action=action_filter.upper())
+
+    page = int(request.args.get("page", 1))
+    per_page = 50
+    pagination = query.order_by(AuditLog.changed_at.desc()).paginate(
+        page=page, per_page=per_page, error_out=False
+    )
+
+    audited_tables = [
+        "controls", "test_records", "policies", "evidence",
+        "systems", "vendors", "risk_register", "pentest_findings",
+        "team_members",
+    ]
+
+    # Resolve changed_by UUIDs to member names
+    member_ids = {e.changed_by for e in pagination.items if e.changed_by}
+    members = {}
+    if member_ids:
+        for m in TeamMember.query.filter(TeamMember.id.in_(member_ids)).all():
+            members[m.id] = m.name
+
+    return render_template(
+        "admin/audit_log.html",
+        entries=pagination.items,
+        pagination=pagination,
+        audited_tables=audited_tables,
+        members=members,
+        current_table=table_filter or "",
+        current_record_id=record_id or "",
+        current_action=action_filter or "",
+    )

@@ -1,4 +1,4 @@
-# MGCompliance
+# Trust Portal
 
 A self-contained, white-label **SOC 2 trust portal and compliance management system** that runs as a standalone Docker deployment on any hosting provider.
 
@@ -20,8 +20,8 @@ Designed for organizations using **AWS**, **GitHub**, **KanbanZone**, and **Clau
 ## Quick Start
 
 ```bash
-git clone <your-repo-url> mgcompliance
-cd mgcompliance
+git clone <your-repo-url> trust-portal
+cd trust-portal
 cp .env.example .env
 # Edit .env with your organization's branding and credentials
 docker compose up --build
@@ -63,9 +63,9 @@ All configuration is via environment variables (see `.env.example` for the compl
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `DATABASE_URL` | PostgreSQL connection string (for external DB) | Set automatically by docker-compose |
-| `POSTGRES_DB` | Database name (docker-compose) | `mgcompliance` |
-| `POSTGRES_USER` | Database user (docker-compose) | `mgcompliance` |
-| `POSTGRES_PASSWORD` | Database password (docker-compose) | `mgcompliance` |
+| `POSTGRES_DB` | Database name (docker-compose) | `trust_portal` |
+| `POSTGRES_USER` | Database user (docker-compose) | `trust_portal` |
+| `POSTGRES_PASSWORD` | Database password (docker-compose) | `trust_portal` |
 | `PORT` | Host port mapping | `5100` |
 
 ### AWS Evidence Collection (Optional)
@@ -155,16 +155,16 @@ your-data-dir/
 
 ```bash
 # Development: set COMPLIANCE_DATA_DIR in .env, then:
-docker exec mgcompliance-dev python -m cli.init --data-dir /data
+docker exec trust-portal-dev python -m cli.init --data-dir /data
 
 # Or pass any path directly:
-docker exec mgcompliance-dev python -m cli.init --data-dir /path/to/data
+docker exec trust-portal-dev python -m cli.init --data-dir /path/to/data
 
 # Dry run (preview without writing):
-docker exec mgcompliance-dev python -m cli.init --data-dir /data --dry-run
+docker exec trust-portal-dev python -m cli.init --data-dir /data --dry-run
 
 # Verbose output:
-docker exec mgcompliance-dev python -m cli.init --data-dir /data -v
+docker exec trust-portal-dev python -m cli.init --data-dir /data -v
 ```
 
 The init command is **idempotent** — running it multiple times produces identical database state. Fields that don't map to model columns are preserved in each record's `other_data` JSON column, so no source data is ever discarded.
@@ -188,7 +188,7 @@ The dev server runs with hot-reload on port 5100. PostgreSQL is on port 5433 (av
 ### Running Tests
 
 ```bash
-docker exec mgcompliance-dev pytest tests/ -v --cov=app
+docker exec trust-portal-dev pytest tests/ -v --cov=app
 ```
 
 Target: >= 80% coverage. All external services (AWS, GitHub) are mocked in tests.
@@ -198,7 +198,7 @@ Target: >= 80% coverage. All external services (AWS, GitHub) are mocked in tests
 Migrations run automatically on container startup. To create a new migration after model changes:
 
 ```bash
-docker exec mgcompliance-dev alembic revision --autogenerate -m "Description of change"
+docker exec trust-portal-dev alembic revision --autogenerate -m "Description of change"
 ```
 
 ## Evidence Collection
@@ -244,7 +244,7 @@ class MyCollector(BaseCollector):
 
 ## AI Agent Governance Templates
 
-MGCompliance ships with template governance documents that establish the SOC 2 evidence chain for any organization using Claude Code + Codex.
+Trust Portal ships with template governance documents that establish the SOC 2 evidence chain for any organization using Claude Code + Codex.
 
 **Location:** `templates/governance/`
 
@@ -260,7 +260,7 @@ See `templates/governance/GOVERNANCE-SETUP.md` for the full setup guide.
 
 ## Decision Log Integration
 
-MGCompliance can ingest AI agent session transcripts as formal compliance audit evidence.
+Trust Portal can ingest AI agent session transcripts as formal compliance audit evidence.
 
 ### How It Works
 
@@ -290,14 +290,14 @@ Controls and policies are organized by SOC 2 TSC category:
 
 ## Deployment on Any VPS
 
-MGCompliance runs on any server with Docker and Docker Compose installed. No cloud-specific services are required.
+Trust Portal runs on any server with Docker and Docker Compose installed. No cloud-specific services are required.
 
 ### Basic Deployment
 
 ```bash
 # On your server
-git clone <your-repo-url> /opt/mgcompliance
-cd /opt/mgcompliance
+git clone <your-repo-url> /opt/trust-portal
+cd /opt/trust-portal
 cp .env.example .env
 # Edit .env: set SECRET_KEY, branding, and optional collector credentials
 docker compose up -d
@@ -305,7 +305,7 @@ docker compose up -d
 
 ### SSL/TLS
 
-For production, place a reverse proxy in front of MGCompliance:
+For production, place a reverse proxy in front of Trust Portal:
 
 **Caddy** (automatic HTTPS):
 ```
@@ -338,7 +338,7 @@ server {
 To use an existing PostgreSQL instance instead of the bundled container:
 
 1. Set `DATABASE_URL` in `.env` to your external connection string
-2. Run only the app service: `docker compose up -d mgcompliance`
+2. Run only the app service: `docker compose up -d trust-portal`
 3. Migrations will run automatically against the external database
 
 ### Backups
@@ -346,13 +346,13 @@ To use an existing PostgreSQL instance instead of the bundled container:
 The PostgreSQL data is stored in a Docker named volume (`pgdata`). To back up:
 
 ```bash
-docker exec mgcompliance-db pg_dump -U mgcompliance mgcompliance > backup_$(date +%Y%m%d).sql
+docker exec trust-portal-db pg_dump -U trust_portal trust_portal > backup_$(date +%Y%m%d).sql
 ```
 
 To restore:
 
 ```bash
-cat backup_20260313.sql | docker exec -i mgcompliance-db psql -U mgcompliance mgcompliance
+cat backup_20260313.sql | docker exec -i trust-portal-db psql -U trust_portal trust_portal
 ```
 
 ## License

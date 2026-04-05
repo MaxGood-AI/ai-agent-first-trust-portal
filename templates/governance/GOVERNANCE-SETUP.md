@@ -4,7 +4,7 @@ This guide walks you through setting up the CLAUDE.md and AGENTS.md governance d
 
 ## Prerequisites
 
-- **MGCompliance** deployed and running (see the main README)
+- **Trust Portal** deployed and running (see the main README)
 - **KanbanZone** account with a board for tracking work
 - **Claude Code** installed on your development machine
 - **Git** repositories for your platform's codebase
@@ -46,13 +46,13 @@ Create a `.gitignore` that excludes all sub-repositories (your actual project re
 
 This governance repo tracks only the root-level policy files. Your actual project repos are cloned inside this directory but excluded from the governance repo's tracking.
 
-## Step 2: Clone MGCompliance
+## Step 2: Clone Trust Portal
 
-Clone the MGCompliance repo into your development directory:
+Clone the Trust Portal repo into your development directory:
 
 ```bash
 cd ~/Development
-git clone <mgcompliance-repo-url> MGCompliance
+git clone <trust-portal-repo-url> trust-portal
 ```
 
 ## Step 3: Copy and Customize the Templates
@@ -60,8 +60,8 @@ git clone <mgcompliance-repo-url> MGCompliance
 Copy the template files to your development root:
 
 ```bash
-cp MGCompliance/templates/governance/CLAUDE.md.template ~/Development/CLAUDE.md
-cp MGCompliance/templates/governance/AGENTS.md.template ~/Development/AGENTS.md
+cp trust-portal/templates/governance/CLAUDE.md.template ~/Development/CLAUDE.md
+cp trust-portal/templates/governance/AGENTS.md.template ~/Development/AGENTS.md
 ```
 
 Now edit both files and replace all placeholders:
@@ -100,7 +100,7 @@ Fill in the Repository Map table with every repo in your development environment
 |------|------|---------|
 | **my-backend** | Python/FastAPI, PostgreSQL | Backend API |
 | **my-frontend** | React + TypeScript | Web application |
-| **MGCompliance** | Python/Flask, PostgreSQL | SOC 2 trust portal. Port 5100. |
+| **Trust Portal** | Python/Flask, PostgreSQL | SOC 2 trust portal. Port 5100. |
 
 ### Integrations
 
@@ -121,7 +121,7 @@ KANBANZONE_BOARD_ID=your-board-public-id
 
 3. Install the `kanban-zone` Claude Skill (follow the skill's setup instructions)
 
-The governance documents reference KanbanZone for card workflow, and the MGCompliance evidence chain tracks approved plans on KanbanZone cards.
+The governance documents reference KanbanZone for card workflow, and the Trust Portal evidence chain tracks approved plans on KanbanZone cards.
 
 ## Step 6: Set Up the Decision Log Hook
 
@@ -157,8 +157,8 @@ if [ -z "$TRANSCRIPT" ] || [ ! -f "$TRANSCRIPT" ]; then
     exit 0
 fi
 
-# Copy transcript to MGCompliance decision-logs/
-DEST_DIR="$DEV_DIR/MGCompliance/decision-logs"
+# Copy transcript to trust-portal decision-logs/
+DEST_DIR="$DEV_DIR/trust-portal/decision-logs"
 mkdir -p "$DEST_DIR"
 
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H%M%SZ")
@@ -216,7 +216,7 @@ git commit -m "Add AI agent governance documents for SOC 2 compliance"
 Verify the setup by starting a Claude Code session in `~/Development` and asking it to:
 1. Read the CLAUDE.md and confirm it understands the conventions
 2. Check that the KanbanZone skill can access your board
-3. End the session and verify a transcript appears in `MGCompliance/decision-logs/`
+3. End the session and verify a transcript appears in `trust-portal/decision-logs/`
 
 ## Ongoing Maintenance
 

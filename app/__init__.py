@@ -1,4 +1,4 @@
-"""MGCompliance — Self-hosted trust portal for SOC 2 compliance."""
+"""AI Agent-First Trust Portal — Self-hosted trust portal for SOC 2 compliance."""
 
 from flasgger import Swagger
 from flask import Flask
@@ -12,6 +12,10 @@ def create_app(config_class=Config):
 
     from app.models import db
     db.init_app(app)
+
+    from app.audit_middleware import register_audit_middleware
+    with app.app_context():
+        register_audit_middleware(db)
 
     from app.routes.portal import portal_bp
     from app.routes.admin import admin_bp

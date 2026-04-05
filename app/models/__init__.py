@@ -15,9 +15,11 @@ from app.models.pentest_finding import PentestFinding
 from app.models.decision_log import DecisionLogSession, DecisionLogEntry
 from app.models.policy_version import PolicyVersion
 from app.models.team_member import TeamMember
+from app.models.audit_log import AuditLog
 
 __all__ = [
     "db", "Control", "System", "Vendor", "vendor_systems", "Policy", "policy_controls",
     "Evidence", "TestRecord", "RiskRegister", "PentestFinding",
     "DecisionLogSession", "DecisionLogEntry", "PolicyVersion", "TeamMember",
+    "AuditLog",
 ]

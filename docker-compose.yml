@@ -1,13 +1,13 @@
 services:
-  mgcompliance:
+  trust-portal:
     build: .
-    container_name: mgcompliance
+    container_name: trust-portal
     ports:
       - "${PORT:-5100}:5100"
     env_file:
       - .env
     environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-mgcompliance}:${POSTGRES_PASSWORD:-mgcompliance}@db:5432/${POSTGRES_DB:-mgcompliance}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-trust_portal}:${POSTGRES_PASSWORD:-trust_portal}@db:5432/${POSTGRES_DB:-trust_portal}
     volumes:
       - compliance-data:/data
     depends_on:
@@ -17,15 +17,15 @@ services:
 
   db:
     image: postgres:17
-    container_name: mgcompliance-db
+    container_name: trust-portal-db
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-mgcompliance}
-      POSTGRES_USER: ${POSTGRES_USER:-mgcompliance}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mgcompliance}
+      POSTGRES_DB: ${POSTGRES_DB:-trust_portal}
+      POSTGRES_USER: ${POSTGRES_USER:-trust_portal}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trust_portal}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mgcompliance}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-trust_portal}"]
       interval: 5s
       timeout: 5s
       retries: 5

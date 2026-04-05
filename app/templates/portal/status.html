@@ -9,7 +9,7 @@
     <h2>{{ category|replace('_', ' ')|title }}</h2>
     {% for item in control_data %}
     <div class="control-status">
-        <h3>{{ item.control.name }}</h3>
+        <h3>{% if item.control.control_id_short %}{{ item.control.control_id_short }}: {% endif %}{{ item.control.name }}</h3>
         <span class="progress">{{ item.passed }}/{{ item.total }} tests passing</span>
         {% if item.total > 0 %}
         <div class="progress-bar">

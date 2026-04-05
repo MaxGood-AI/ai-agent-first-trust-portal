@@ -556,6 +556,96 @@ def test_load_evidence_other_data(app, data_dir):
         assert ev.other_data["extra_field"] == "should be in other_data"
 
 
+def test_load_evidence_matching_control_name_fallback(app, data_dir):
+    """Evidence resolves via control_name when test_name doesn't match."""
+    with app.app_context():
+        ctrl = Control(id="ctrl-cn", name="Vuln scanning", category="security")
+        db.session.add(ctrl)
+        tr = TestRecord(
+            id="test-cn",
+            control_id="ctrl-cn",
+            name="Different name",
+            status="passed",
+            evidence_status="submitted",
+        )
+        db.session.add(tr)
+        db.session.commit()
+
+    write_json(data_dir / "evidence" / "evidence-index.json", [{
+        "test_name": "No match",
+        "control_name": "Vuln scanning",
+        "evidence_type": "automated",
+        "description": "Fallback test",
+        "collected_at": "2026-04-01T00:00:00+00:00",
+        "collector_name": "test",
+    }])
+
+    with app.app_context():
+        from cli.loaders.evidence import EvidenceLoader
+        result = EvidenceLoader().load(str(data_dir))
+        assert result["inserted"] == 1
+
+        ev = Evidence.query.first()
+        assert ev.test_record_id == "test-cn"
+        assert ev.other_data["test_name"] == "No match"
+        assert ev.other_data["control_name"] == "Vuln scanning"
+
+
+def test_load_evidence_control_name_not_needed_when_test_matches(app, data_dir):
+    """Strategy 1 (test_name) takes priority over control_name."""
+    with app.app_context():
+        ctrl = Control(id="ctrl-pri", name="Other control", category="security")
+        db.session.add(ctrl)
+        tr = TestRecord(
+            id="test-pri",
+            control_id="ctrl-pri",
+            name="Exact match",
+            status="passed",
+            evidence_status="submitted",
+        )
+        db.session.add(tr)
+        db.session.commit()
+
+    write_json(data_dir / "evidence" / "evidence-index.json", [{
+        "test_name": "Exact match",
+        "control_name": "Something else entirely",
+        "evidence_type": "automated",
+        "description": "Priority test",
+        "collected_at": "2026-04-01T00:00:00+00:00",
+        "collector_name": "test",
+    }])
+
+    with app.app_context():
+        from cli.loaders.evidence import EvidenceLoader
+        result = EvidenceLoader().load(str(data_dir))
+        assert result["inserted"] == 1
+
+        ev = Evidence.query.first()
+        assert ev.test_record_id == "test-pri"
+
+
+def test_load_evidence_control_exists_but_no_tests_skips(app, data_dir):
+    """Control found but has no tests — evidence is skipped."""
+    with app.app_context():
+        ctrl = Control(id="ctrl-orphan", name="Orphan control", category="security")
+        db.session.add(ctrl)
+        db.session.commit()
+
+    write_json(data_dir / "evidence" / "evidence-index.json", [{
+        "test_name": "Orphan control",
+        "evidence_type": "automated",
+        "description": "Should be skipped",
+        "collected_at": "2026-04-01T00:00:00+00:00",
+        "collector_name": "test",
+    }])
+
+    with app.app_context():
+        from cli.loaders.evidence import EvidenceLoader
+        result = EvidenceLoader().load(str(data_dir))
+        assert result["skipped"] == 1
+        assert result["inserted"] == 0
+
+
 # --- Systems Loader Tests ---
 
 

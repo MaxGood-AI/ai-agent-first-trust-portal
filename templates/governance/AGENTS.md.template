@@ -46,7 +46,7 @@ This parent directory (`~/Development`) is tracked in a git repository. It conta
 
 | Repo | Tech | Purpose |
 |------|------|---------|
-| **MGCompliance** | Python/Flask, PostgreSQL, Jinja2 | Self-hosted trust portal and SOC 2 compliance management. Port 5100. |
+| **Trust Portal** | Python/Flask, PostgreSQL, Jinja2 | Self-hosted trust portal and SOC 2 compliance management. Port 5100. |
 <!-- Add your repositories here -->
 
 ## Architecture
@@ -75,10 +75,10 @@ This parent directory (`~/Development`) is tracked in a git repository. It conta
 <!-- CUSTOMIZE: Add the development commands for each of your repos.
      Follow the format below. -->
 
-### MGCompliance (Trust Portal)
+### Trust Portal
 ```bash
 docker compose up --build
-docker exec mgcompliance pytest tests/ -v --cov=app
+docker exec trust-portal pytest tests/ -v --cov=app
 ```
 
 <!-- Add commands for your other repos here -->
@@ -124,7 +124,7 @@ KanbanZone credentials (`KANBANZONE_API_KEY` and `KANBANZONE_BOARD_ID`) are stor
 4. **Append the approved plan to the card** description using the KanbanZone skill, BEFORE starting any implementation work.
 5. **Do the work**, including writing or updating automated tests if applicable.
 6. **Present the completed work to the user** for review. Only proceed to the next step if the user accepts.
-7. **Run the independent code review** — compose the review prompt from `MGCompliance/templates/governance/REVIEW-PROMPT.md`, substituting the card number, board URL, and repo list. Invoke the review agent (e.g., `codex --prompt "..."`). Wait for the review to complete and findings to be appended to the card. Only proceed if the verdict is **PASS**. If **FAIL**, present the blocking issues to the user and resolve them before retrying.
+7. **Run the independent code review** — compose the review prompt from `trust-portal/templates/governance/REVIEW-PROMPT.md`, substituting the card number, board URL, and repo list. Invoke the review agent (e.g., `codex --prompt "..."`). Wait for the review to complete and findings to be appended to the card. Only proceed if the verdict is **PASS**. If **FAIL**, present the blocking issues to the user and resolve them before retrying.
 8. **Commit and push** the changes (following the Commit Style guidelines).
 9. **Move the card** to the appropriate column: **"Ready to Release to the World"** for Expedite cards, **"Final Review"** for normal development cards, or **"Reflection / Learning"** for business cards. Never move cards directly to "DONE".
 
@@ -171,10 +171,10 @@ All development work produces a formal evidence chain for SOC 2 compliance. The 
 
 ### Evidence Artifacts
 
-1. **Decision Log** — Every AI agent session transcript (prompts, responses, tool calls — excluding internal thinking) is automatically captured and staged in `MGCompliance/decision-logs/`. These are the authoritative record of what was discussed, decided, and implemented.
+1. **Decision Log** — Every AI agent session transcript (prompts, responses, tool calls — excluding internal thinking) is automatically captured and staged in `trust-portal/decision-logs/`. These are the authoritative record of what was discussed, decided, and implemented.
 2. **KanbanZone Cards** — Approved plans appended to card descriptions before implementation begins. These are the design review and change approval evidence.
 3. **User Verification ("done." protocol)** — When an AI agent asks the user to verify changes and the user responds **"done."**, this constitutes a formal smoke test acknowledgment. The decision log captures the exact context: what was asked, what was tested, and the user's confirmation. No further documentation is required.
-4. **Independent Code Review** — Before final commit, the main agent automatically invokes an independent review agent (e.g., OpenAI Codex) using the prompt template in `MGCompliance/templates/governance/REVIEW-PROMPT.md`. The review covers functionality, security, testing, and style. Findings and a PASS/FAIL verdict are appended to the KanbanZone card (see "Independent Code Review Protocol" below).
+4. **Independent Code Review** — Before final commit, the main agent automatically invokes an independent review agent (e.g., OpenAI Codex) using the prompt template in `trust-portal/templates/governance/REVIEW-PROMPT.md`. The review covers functionality, security, testing, and style. Findings and a PASS/FAIL verdict are appended to the KanbanZone card (see "Independent Code Review Protocol" below).
 5. **Git Commits** — Structured `## Problem / ## Solution / ## Verified` messages with KanbanZone card links and `Co-Authored-By` attribution.
 6. **CLAUDE.md / AGENTS.md** — These governance files are **formal policy documents**. Every version (tracked in git) is a formal policy version for SOC 2 purposes. Changes to these files are changes to compliance policy.
 
@@ -191,7 +191,7 @@ This review is **automated** — the main agent (e.g., Claude Code) invokes an i
 
 **How it works:**
 
-1. The main agent reads the review prompt template from `MGCompliance/templates/governance/REVIEW-PROMPT.md`
+1. The main agent reads the review prompt template from `trust-portal/templates/governance/REVIEW-PROMPT.md`
 2. It substitutes the card number, board URL, and list of repos with changes
 3. It invokes the review agent CLI (e.g., `codex --prompt "<composed prompt>"`)
 4. The review agent performs a complete static and dynamic analysis:
@@ -212,7 +212,7 @@ This review serves as the independent code review evidence for SOC 2 change mana
 
 ### Decision Log Capture
 
-Session transcripts are automatically captured by hooks scoped to the development directory. Personal projects in other directories are never logged. Transcripts are staged in `MGCompliance/decision-logs/` for ingestion into the compliance database.
+Session transcripts are automatically captured by hooks scoped to the development directory. Personal projects in other directories are never logged. Transcripts are staged in `trust-portal/decision-logs/` for ingestion into the compliance database.
 
 ## Commit Style
 

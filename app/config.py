@@ -10,7 +10,7 @@ load_dotenv()
 class Config:
     SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-change-me")
     SQLALCHEMY_DATABASE_URI = os.environ.get(
-        "DATABASE_URL", "postgresql://mgcompliance:password@localhost:5433/mgcompliance"
+        "DATABASE_URL", "postgresql://trust_portal:password@localhost:5433/trust_portal"
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
@@ -20,7 +20,7 @@ class Config:
     POLICY_DIR = os.environ.get("POLICY_DIR", "")
 
     SWAGGER = {
-        "title": "MGCompliance API",
+        "title": "Trust Portal API",
         "description": "SOC 2 Trust Portal and Compliance Management API",
         "version": "1.0.0",
         "uiversion": 3,

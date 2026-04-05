@@ -6,7 +6,7 @@ until python3 -c "
 import os, psycopg2
 conn = psycopg2.connect(os.environ.get(
     'DATABASE_URL',
-    'postgresql://mgcompliance:password@db:5432/mgcompliance'
+    'postgresql://trust_portal:password@db:5432/trust_portal'
 ))
 conn.close()
 " 2>/dev/null; do

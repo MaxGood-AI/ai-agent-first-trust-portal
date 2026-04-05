@@ -1,10 +1,10 @@
-# CLAUDE.md — MGCompliance
+# CLAUDE.md — AI Agent-First Trust Portal
 
 This file provides guidance to AI coding agents when working with code in this repository.
 
 ## Overview
 
-**MGCompliance** is a self-contained, white-label SOC 2 trust portal and compliance management system. It runs as a standalone Docker deployment on any hosting provider — no cloud-specific dependencies required.
+**ai-agent-first-trust-portal** is a self-contained, white-label SOC 2 trust portal and compliance management system. It runs as a standalone Docker deployment on any hosting provider — no cloud-specific dependencies required.
 
 ## Tech Stack
 
@@ -76,15 +76,15 @@ All API endpoints are documented with OpenAPI 3.0 annotations (Flasgger). Intera
 Migrations run automatically on startup. To create a new migration:
 
 ```bash
-docker exec mgcompliance-dev alembic revision --autogenerate -m "Description"
+docker exec trust-portal-dev alembic revision --autogenerate -m "Description"
 ```
 
 ## Testing
 
-**Docker-only testing — no venv:** All tests MUST be run inside the Docker container via `docker exec mgcompliance-dev`. Do NOT create or use Python virtual environments (`venv`, `virtualenv`, `pipenv`, `conda`, etc.). There is no venv setup. Dependencies are managed inside the Docker image.
+**Docker-only testing — no venv:** All tests MUST be run inside the Docker container via `docker exec trust-portal-dev`. Do NOT create or use Python virtual environments (`venv`, `virtualenv`, `pipenv`, `conda`, etc.). There is no venv setup. Dependencies are managed inside the Docker image.
 
 ```bash
-docker exec mgcompliance-dev pytest tests/ -v --cov=app
+docker exec trust-portal-dev pytest tests/ -v --cov=app
 ```
 
 Target: >= 80% coverage. Mock all external services (AWS, GitHub).

@@ -1,7 +1,7 @@
 services:
-  mgcompliance:
+  trust-portal:
     build: .
-    container_name: mgcompliance-dev
+    container_name: trust-portal-dev
     ports:
       - "5100:5100"
     volumes:
@@ -11,7 +11,7 @@ services:
       - .env
     environment:
       - FLASK_ENV=development
-      - DATABASE_URL=postgresql://mgcompliance:password@db:5432/mgcompliance
+      - DATABASE_URL=postgresql://trust_portal:password@db:5432/trust_portal
     depends_on:
       db:
         condition: service_healthy
@@ -21,17 +21,17 @@ services:
 
   db:
     image: postgres:17
-    container_name: mgcompliance-db
+    container_name: trust-portal-db
     environment:
-      POSTGRES_DB: mgcompliance
-      POSTGRES_USER: mgcompliance
+      POSTGRES_DB: trust_portal
+      POSTGRES_USER: trust_portal
       POSTGRES_PASSWORD: password
     ports:
       - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mgcompliance"]
+      test: ["CMD-SHELL", "pg_isready -U trust_portal"]
       interval: 5s
       timeout: 5s
       retries: 5
