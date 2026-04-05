@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Admin — {{ display_name }}{% endblock %}
+
+{% block content %}
+<h1>{{ display_name }} Management</h1>
+
+<p><a href="{{ url_for('admin.dashboard') }}">&larr; Back to Admin Dashboard</a></p>
+
+<h2>Add New</h2>
+<form method="POST">
+    <label>Name: <input type="text" name="name" required></label>
+    <label>Category: <input type="text" name="category"></label>
+    <button type="submit">Create</button>
+</form>
+
+<h2>Current {{ display_name }} ({{ items|length }})</h2>
+{% if items %}
+<table>
+    <thead>
+        <tr>
+            <th>Name / Title</th>
+            <th>ID</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for item in items %}
+        <tr>
+            <td>{{ item.name if item.name is defined else item.title if item.title is defined else item.id }}</td>
+            <td><code>{{ item.id[:8] }}...</code></td>
+            <td>
+                <form method="POST" action="{{ request.path }}/{{ item.id }}/delete" style="display:inline">
+                    <button type="submit" onclick="return confirm('Delete this item?')">Delete</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>No {{ display_name|lower }} found.</p>
+{% endif %}
+{% endblock %}

@@ -2,7 +2,7 @@
 
 from flask import Blueprint, render_template, request, redirect, url_for, flash, session
 
-from app.models import db, Control, Policy, TestRecord, Evidence, TeamMember
+from app.models import db, Control, System, Vendor, Policy, TestRecord, Evidence, RiskRegister, TeamMember
 from app.auth import require_api_key, require_admin
 from app.services import team_service
 
@@ -140,3 +140,162 @@ def regenerate_team_member_key(member_id):
     else:
         flash("Team member not found.", "error")
     return redirect(url_for("admin.team_management"))
+
+
+# --- Admin CRUD for core entities ---
+
+import uuid
+from sqlalchemy import inspect as sa_inspect
+
+
+def _admin_entity_list(model_class, display_name):
+    """Generic admin list view for an entity type."""
+    items = model_class.query.all()
+    return render_template(
+        "admin/entity_list.html",
+        items=items,
+        display_name=display_name,
+    )
+
+
+def _admin_entity_create(model_class, redirect_endpoint, required_fields):
+    """Generic admin create handler."""
+    data = {}
+    mapper = sa_inspect(model_class)
+    valid_columns = {attr.key for attr in mapper.column_attrs}
+
+    for key in valid_columns:
+        if key in ("id", "created_at", "updated_at", "other_data"):
+            continue
+        value = request.form.get(key, "").strip()
+        if value:
+            data[key] = value
+
+    for field in required_fields:
+        if field not in data:
+            flash(f"Missing required field: {field}", "error")
+            return redirect(url_for(redirect_endpoint))
+
+    data["id"] = str(uuid.uuid4())
+    instance = model_class(**data)
+    db.session.add(instance)
+    db.session.commit()
+    flash(f"Created: {data.get('name', data.get('title', data['id']))}", "success")
+    return redirect(url_for(redirect_endpoint))
+
+
+def _admin_entity_delete(model_class, item_id, redirect_endpoint):
+    """Generic admin delete handler."""
+    item = db.session.get(model_class, item_id)
+    if item:
+        db.session.delete(item)
+        db.session.commit()
+        flash("Deleted.", "success")
+    else:
+        flash("Not found.", "error")
+    return redirect(url_for(redirect_endpoint))
+
+
+@admin_bp.route("/controls")
+@require_api_key
+@require_admin
+def admin_controls():
+    return _admin_entity_list(Control, "Controls")
+
+
+@admin_bp.route("/controls", methods=["POST"])
+@require_api_key
+@require_admin
+def admin_controls_create():
+    return _admin_entity_create(Control, "admin.admin_controls", ["name", "category"])
+
+
+@admin_bp.route("/controls/<item_id>/delete", methods=["POST"])
+@require_api_key
+@require_admin
+def admin_controls_delete(item_id):
+    return _admin_entity_delete(Control, item_id, "admin.admin_controls")
+
+
+@admin_bp.route("/systems")
+@require_api_key
+@require_admin
+def admin_systems():
+    return _admin_entity_list(System, "Systems")
+
+
+@admin_bp.route("/systems", methods=["POST"])
+@require_api_key
+@require_admin
+def admin_systems_create():
+    return _admin_entity_create(System, "admin.admin_systems", ["name"])
+
+
+@admin_bp.route("/systems/<item_id>/delete", methods=["POST"])
+@require_api_key
+@require_admin
+def admin_systems_delete(item_id):
+    return _admin_entity_delete(System, item_id, "admin.admin_systems")
+
+
+@admin_bp.route("/vendors")
+@require_api_key
+@require_admin
+def admin_vendors():
+    return _admin_entity_list(Vendor, "Vendors")
+
+
+@admin_bp.route("/vendors", methods=["POST"])
+@require_api_key
+@require_admin
+def admin_vendors_create():
+    return _admin_entity_create(Vendor, "admin.admin_vendors", ["name"])
+
+
+@admin_bp.route("/vendors/<item_id>/delete", methods=["POST"])
+@require_api_key
+@require_admin
+def admin_vendors_delete(item_id):
+    return _admin_entity_delete(Vendor, item_id, "admin.admin_vendors")
+
+
+@admin_bp.route("/policies")
+@require_api_key
+@require_admin
+def admin_policies():
+    return _admin_entity_list(Policy, "Policies")
+
+
+@admin_bp.route("/policies", methods=["POST"])
+@require_api_key
+@require_admin
+def admin_policies_create():
+    return _admin_entity_create(Policy, "admin.admin_policies", ["title", "category"])
+
+
+@admin_bp.route("/policies/<item_id>/delete", methods=["POST"])
+@require_api_key
+@require_admin
+def admin_policies_delete(item_id):
+    return _admin_entity_delete(Policy, item_id, "admin.admin_policies")
+
+
+@admin_bp.route("/risks")
+@require_api_key
+@require_admin
+def admin_risks():
+    return _admin_entity_list(RiskRegister, "Risk Register")
+
+
+@admin_bp.route("/risks", methods=["POST"])
+@require_api_key
+@require_admin
+def admin_risks_create():
+    return _admin_entity_create(RiskRegister, "admin.admin_risks", ["name"])
+
+
+@admin_bp.route("/risks/<item_id>/delete", methods=["POST"])
+@require_api_key
+@require_admin
+def admin_risks_delete(item_id):
+    return _admin_entity_delete(RiskRegister, item_id, "admin.admin_risks")
