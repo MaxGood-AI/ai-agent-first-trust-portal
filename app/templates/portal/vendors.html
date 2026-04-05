@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Vendors{% endblock %}
+
+{% block content %}
+<h1>Vendor Inventory</h1>
+<p>Third-party vendors and subprocessors.</p>
+
+{% if vendors %}
+<table>
+    <thead>
+        <tr>
+            <th>Vendor</th>
+            <th>Status</th>
+            <th>Subprocessor</th>
+            <th>Classification</th>
+            <th>Locations</th>
+            <th>Purpose</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for vendor in vendors %}
+        <tr>
+            <td>{% if vendor.website_url %}<a href="{{ vendor.website_url }}">{{ vendor.name }}</a>{% else %}{{ vendor.name }}{% endif %}</td>
+            <td>{{ vendor.status|title }}</td>
+            <td>{{ 'Yes' if vendor.is_subprocessor else 'No' }}</td>
+            <td>{{ (vendor.classification or [])|join(', ')|replace('_', ' ')|title }}</td>
+            <td>{{ (vendor.locations or [])|map(attribute='label')|join(', ') }}</td>
+            <td>{{ (vendor.purpose or '')[:80] }}{% if (vendor.purpose or '')|length > 80 %}...{% endif %}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>Vendor inventory is being populated. Check back soon.</p>
+{% endif %}
+{% endblock %}

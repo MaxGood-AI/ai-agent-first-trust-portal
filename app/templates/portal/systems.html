@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Systems{% endblock %}
+
+{% block content %}
+<h1>System Inventory</h1>
+<p>Infrastructure and applications tracked for compliance.</p>
+
+{% if systems %}
+<table>
+    <thead>
+        <tr>
+            <th>System</th>
+            <th>Provider</th>
+            <th>Purpose</th>
+            <th>Type</th>
+            <th>Risk Score</th>
+            <th>Group</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for system in systems %}
+        <tr>
+            <td>{{ system.name }}</td>
+            <td>{{ system.provider or '—' }}</td>
+            <td>{{ system.purpose or '—' }}</td>
+            <td>{{ (system.system_type or [])|join(', ') }}</td>
+            <td>{{ '%.0f'|format(system.risk_score) if system.risk_score is not none else '—' }}</td>
+            <td>{{ system.group_name or '—' }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>System inventory is being populated. Check back soon.</p>
+{% endif %}
+{% endblock %}

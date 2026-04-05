@@ -7,7 +7,7 @@ import markdown
 from flask import Blueprint, render_template, current_app, abort
 from markupsafe import Markup
 
-from app.models import db, Control, Policy, TestRecord
+from app.models import db, Control, System, Vendor, Policy, TestRecord, RiskRegister
 
 logger = logging.getLogger(__name__)
 
@@ -130,5 +130,54 @@ def status():
     return render_template(
         "portal/status.html",
         categories=categories,
+        brand_name=current_app.config["PORTAL_BRAND_NAME"],
+    )
+
+
+@portal_bp.route("/controls/<control_id>")
+def control_detail(control_id):
+    """Display a single control with its tests and linked policies."""
+    control = db.session.get(Control, control_id)
+    if not control:
+        abort(404)
+
+    tests = TestRecord.query.filter_by(control_id=control.id).all()
+    return render_template(
+        "portal/control_detail.html",
+        control=control,
+        tests=tests,
+        brand_name=current_app.config["PORTAL_BRAND_NAME"],
+    )
+
+
+@portal_bp.route("/systems")
+def systems():
+    """List all systems in the inventory."""
+    all_systems = System.query.order_by(System.name).all()
+    return render_template(
+        "portal/systems.html",
+        systems=all_systems,
+        brand_name=current_app.config["PORTAL_BRAND_NAME"],
+    )
+
+
+@portal_bp.route("/vendors")
+def vendors():
+    """List all vendors."""
+    all_vendors = Vendor.query.order_by(Vendor.name).all()
+    return render_template(
+        "portal/vendors.html",
+        vendors=all_vendors,
+        brand_name=current_app.config["PORTAL_BRAND_NAME"],
+    )
+
+
+@portal_bp.route("/risks")
+def risks():
+    """List risk register entries."""
+    all_risks = RiskRegister.query.order_by(RiskRegister.risk_score.desc().nullslast()).all()
+    return render_template(
+        "portal/risks.html",
+        risks=all_risks,
         brand_name=current_app.config["PORTAL_BRAND_NAME"],
     )

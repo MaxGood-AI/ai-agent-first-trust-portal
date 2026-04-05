@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Risk Register{% endblock %}
+
+{% block content %}
+<h1>Risk Register</h1>
+<p>Identified risks and their treatment plans.</p>
+
+{% if risks %}
+<table>
+    <thead>
+        <tr>
+            <th>Risk</th>
+            <th>Likelihood</th>
+            <th>Impact</th>
+            <th>Score</th>
+            <th>Treatment</th>
+            <th>Status</th>
+            <th>Owner</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for risk in risks %}
+        <tr>
+            <td>{{ risk.name }}</td>
+            <td>{{ risk.likelihood or '—' }}</td>
+            <td>{{ risk.impact or '—' }}</td>
+            <td>{{ '%.1f'|format(risk.risk_score) if risk.risk_score is not none else '—' }}</td>
+            <td>{{ (risk.treatment or '—')|title }}</td>
+            <td>{{ (risk.status or '—')|title }}</td>
+            <td>{{ risk.owner_name or '—' }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>Risk register is being populated. Check back soon.</p>
+{% endif %}
+{% endblock %}

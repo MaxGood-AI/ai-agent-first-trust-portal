@@ -4,7 +4,7 @@ import pytest
 
 from app import create_app
 from app.config import TestConfig
-from app.models import db, Policy
+from app.models import db, Control, Policy
 from app.services import team_service
 
 
@@ -71,6 +71,40 @@ def test_portal_policy_detail(app_ctx, client):
 
 def test_portal_policy_detail_404(client):
     resp = client.get("/policies/nonexistent")
+    assert resp.status_code == 404
+
+
+def test_portal_systems(client):
+    resp = client.get("/systems")
+    assert resp.status_code == 200
+    assert b"System Inventory" in resp.data
+
+
+def test_portal_vendors(client):
+    resp = client.get("/vendors")
+    assert resp.status_code == 200
+    assert b"Vendor Inventory" in resp.data
+
+
+def test_portal_risks(client):
+    resp = client.get("/risks")
+    assert resp.status_code == 200
+    assert b"Risk Register" in resp.data
+
+
+def test_portal_control_detail(app_ctx, client):
+    with app_ctx.app_context():
+        c = Control(id="ctrl-det", name="Detail Test", category="security")
+        db.session.add(c)
+        db.session.commit()
+
+    resp = client.get("/controls/ctrl-det")
+    assert resp.status_code == 200
+    assert b"Detail Test" in resp.data
+
+
+def test_portal_control_detail_404(client):
+    resp = client.get("/controls/nonexistent")
     assert resp.status_code == 404
 
 

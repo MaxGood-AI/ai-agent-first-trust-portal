@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}{{ control.name }}{% endblock %}
+
+{% block content %}
+<h1>{{ control.control_id_short or '' }} {{ control.name }}</h1>
+
+<table>
+    <tr><th>Category</th><td>{{ control.category|replace('_', ' ')|title }}</td></tr>
+    {% if control.source_category %}<tr><th>Domain</th><td>{{ control.source_category }}</td></tr>{% endif %}
+    <tr><th>State</th><td>{{ control.state }}</td></tr>
+    {% if control.frequency %}<tr><th>Frequency</th><td>{{ control.frequency|title }}</td></tr>{% endif %}
+    {% if control.maturity_level %}<tr><th>Maturity</th><td>Level {{ control.maturity_level }}</td></tr>{% endif %}
+    {% if control.group_name %}<tr><th>Group</th><td>{{ control.group_name }}</td></tr>{% endif %}
+    {% if control.owner_name %}<tr><th>Owner</th><td>{{ control.owner_name }}</td></tr>{% endif %}
+</table>
+
+{% if control.description %}
+<p>{{ control.description }}</p>
+{% endif %}
+
+{% if control.soc2_references %}
+<h2>SOC 2 References</h2>
+<ul>
+    {% for ref in control.soc2_references %}
+    <li><strong>{{ ref.referenceId }}</strong> — {{ ref.description[:100] }}{% if ref.description|length > 100 %}...{% endif %}</li>
+    {% endfor %}
+</ul>
+{% endif %}
+
+<h2>Tests ({{ tests|length }})</h2>
+{% if tests %}
+<table>
+    <thead><tr><th>Test</th><th>Status</th><th>Evidence</th><th>Type</th></tr></thead>
+    <tbody>
+    {% for test in tests %}
+    <tr>
+        <td>{{ test.name }}</td>
+        <td>{{ test.status|replace('_', ' ')|title }}</td>
+        <td>{{ test.evidence_status|replace('_', ' ')|title }}</td>
+        <td>{{ (test.test_type or '')|replace('_', ' ')|title }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>No tests defined for this control.</p>
+{% endif %}
+
+{% if control.policies %}
+<h2>Linked Policies</h2>
+<ul>
+    {% for policy in control.policies %}
+    <li><a href="{{ url_for('portal.policy_detail', policy_id=policy.id) }}">{{ policy.title }}</a></li>
+    {% endfor %}
+</ul>
+{% endif %}
+
+<p><a href="{{ url_for('portal.controls') }}">&larr; Back to Controls</a></p>
+{% endblock %}
