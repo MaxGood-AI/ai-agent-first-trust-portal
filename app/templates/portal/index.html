@@ -55,6 +55,12 @@
     <p><a href="{{ url_for('portal.ai_transparency') }}">Learn About Our Approach</a></p>
 </section>
 
+<section class="client-access" style="text-align: center; padding: 2rem; background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius); margin: 2rem 0;">
+    <h2>For Security Reviewers</h2>
+    <p>If you've been provided a compliance report access key, view the detailed compliance report.</p>
+    <p><a href="{{ url_for('admin.client_login') }}">Access Compliance Report</a></p>
+</section>
+
 <section class="contact">
     <h2>Questions?</h2>
     <p>For compliance inquiries, contact <a href="mailto:{{ portal.contact_email }}">{{ portal.contact_email }}</a>.</p>

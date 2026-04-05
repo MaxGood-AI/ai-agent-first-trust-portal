@@ -9,6 +9,12 @@ from app.services import team_service
 
 
 @pytest.fixture
+def admin_member(app_ctx):
+    return team_service.create_member("Admin", "admin@example.com", "human",
+                                      is_compliance_admin=True)
+
+
+@pytest.fixture
 def app_ctx():
     app = create_app(TestConfig)
     with app.app_context():
@@ -181,3 +187,69 @@ def test_status_page_shows_control_id(app_ctx, client):
     resp = client.get("/status")
     assert resp.status_code == 200
     assert b"SEC-42" in resp.data
+
+
+# --- Admin navigation regression tests ---
+
+
+def test_evidence_page_has_back_to_dashboard(client, admin_member):
+    """Evidence management page must have a back-to-dashboard link."""
+    resp = client.get("/admin/evidence",
+                      headers={"X-API-Key": admin_member.api_key})
+    assert resp.status_code == 200
+    assert b"Back to Dashboard" in resp.data
+
+
+def test_team_page_has_back_to_dashboard(client, admin_member):
+    """Team members page must have a back-to-dashboard link."""
+    resp = client.get("/admin/team",
+                      headers={"X-API-Key": admin_member.api_key})
+    assert resp.status_code == 200
+    assert b"Back to Dashboard" in resp.data
+
+
+def test_audit_log_page_has_back_to_dashboard(client, admin_member):
+    """Audit log page must have a back-to-dashboard link."""
+    resp = client.get("/admin/audit-log",
+                      headers={"X-API-Key": admin_member.api_key})
+    assert resp.status_code == 200
+    assert b"Back to Dashboard" in resp.data
+
+
+def test_settings_page_has_back_to_dashboard(client, admin_member):
+    """Settings page must have a back-to-dashboard link."""
+    resp = client.get("/admin/settings",
+                      headers={"X-API-Key": admin_member.api_key})
+    assert resp.status_code == 200
+    assert b"Back to Dashboard" in resp.data
+
+
+def test_dashboard_has_all_quick_action_links(client, admin_member):
+    """Dashboard must link to evidence, team, audit log, and settings."""
+    resp = client.get("/admin/",
+                      headers={"X-API-Key": admin_member.api_key})
+    assert resp.status_code == 200
+    assert b"evidence" in resp.data.lower()
+    assert b"team" in resp.data.lower()
+    assert b"audit-log" in resp.data
+    assert b"settings" in resp.data.lower()
+
+
+def test_team_page_has_client_role_option(client, admin_member):
+    """Team member creation form must include 'client' role option."""
+    resp = client.get("/admin/team",
+                      headers={"X-API-Key": admin_member.api_key})
+    assert resp.status_code == 200
+    assert b'value="client"' in resp.data
+
+
+def test_footer_has_legal_link(client):
+    """Every page footer must have a link to /legal."""
+    resp = client.get("/")
+    assert b"/legal" in resp.data
+
+
+def test_navigation_has_ai_transparency(client):
+    """Navigation must have AI Transparency link."""
+    resp = client.get("/")
+    assert b"ai-transparency" in resp.data

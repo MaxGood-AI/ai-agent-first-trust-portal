@@ -3,6 +3,7 @@
 
 {% block content %}
 <h1>Team Members</h1>
+<p><a href="{{ url_for('admin.dashboard') }}">&larr; Back to Dashboard</a></p>
 
 {% with messages = get_flashed_messages(with_categories=true) %}
 {% if messages %}
@@ -29,7 +30,16 @@
         <select id="role" name="role">
             <option value="human">Human</option>
             <option value="agent">Agent</option>
+            <option value="client">Client (Report Viewer)</option>
         </select>
+    </div>
+    <div class="form-row">
+        <label for="company">Company (optional)</label>
+        <input type="text" id="company" name="company" placeholder="e.g. Acme Corp">
+    </div>
+    <div class="form-row">
+        <label for="expires_at">Access Expires (optional)</label>
+        <input type="date" id="expires_at" name="expires_at">
     </div>
     <div class="form-row">
         <label>
@@ -46,8 +56,10 @@
             <th>Name</th>
             <th>Email</th>
             <th>Role</th>
+            <th>Company</th>
             <th>Admin</th>
             <th>API Key</th>
+            <th>Expires</th>
             <th>Status</th>
             <th>Actions</th>
         </tr>
@@ -58,9 +70,19 @@
             <td>{{ member.name }}</td>
             <td>{{ member.email }}</td>
             <td>{{ member.role }}</td>
+            <td>{{ member.company or '' }}</td>
             <td>{{ "Yes" if member.is_compliance_admin else "No" }}</td>
             <td><code>{{ member.api_key[:8] }}...{{ member.api_key[-4:] }}</code></td>
-            <td>{{ "Active" if member.is_active else "Inactive" }}</td>
+            <td>{{ member.expires_at.strftime('%Y-%m-%d') if member.expires_at else 'Never' }}</td>
+            <td>
+                {% if not member.is_active %}
+                    Inactive
+                {% elif member.is_expired %}
+                    <span style="color: #c53030;">Expired</span>
+                {% else %}
+                    Active
+                {% endif %}
+            </td>
             <td>
                 {% if member.is_active %}
                 <form method="POST" action="{{ url_for('admin.regenerate_team_member_key', member_id=member.id) }}" style="display:inline">

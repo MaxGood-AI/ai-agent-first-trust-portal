@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+{% block title %}Compliance Report{% endblock %}
+
+{% block content %}
+<div style="display: flex; justify-content: space-between; align-items: center;">
+    <h1>{{ portal.company_brand_name }} — Compliance Report</h1>
+    <span style="color: #718096; font-size: 0.85rem;">Confidential</span>
+</div>
+
+{% if portal.soc2_stages %}
+<section class="soc2-journey">
+    <h2>SOC 2 Compliance Journey</h2>
+    <div class="stepper">
+        {% for stage in portal.soc2_stages %}
+        {% if stage.key != 'not_started' %}
+        <div class="step {{ stage.status }}">
+            <div class="step-indicator">
+                {% if stage.status == 'completed' %}&#10003;{% elif stage.status == 'current' %}&#9679;{% else %}&#9675;{% endif %}
+            </div>
+            <div class="step-label">
+                {{ stage.label }}
+                {% if stage.date %}<span class="step-date">{{ stage.date }}</span>{% endif %}
+            </div>
+        </div>
+        {% endif %}
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
+<section>
+    <h2>Compliance Score</h2>
+    <div class="admin-grid">
+        <div class="stat-card">
+            <h3>Overall</h3>
+            <span class="stat">{{ "%.0f"|format(summary.overall_score) }}%</span>
+        </div>
+        <div class="stat-card">
+            <h3>Controls</h3>
+            <span class="stat">{{ summary.total_controls }}</span>
+        </div>
+        <div class="stat-card">
+            <h3>Tests</h3>
+            <span class="stat">{{ summary.total_tests }}</span>
+        </div>
+        <div class="stat-card warning">
+            <h3>Evidence Gaps</h3>
+            <span class="stat">{{ summary.evidence_gaps }}</span>
+        </div>
+    </div>
+
+    <h3>By Category</h3>
+    <table>
+        <thead>
+            <tr><th>Category</th><th>Score</th></tr>
+        </thead>
+        <tbody>
+            {% for cat, score in summary.categories.items() %}
+            <tr>
+                <td>{{ cat|replace('_', ' ')|title }}</td>
+                <td>{{ "%.0f"|format(score) }}%</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+
+<section>
+    <h2>Controls &amp; Test Results</h2>
+    {% for category, control_data in categories.items() %}
+    {% if control_data %}
+    <h3>{{ category|replace('_', ' ')|title }}</h3>
+    <table>
+        <thead>
+            <tr><th>ID</th><th>Control</th><th>Tests Passing</th><th>State</th></tr>
+        </thead>
+        <tbody>
+            {% for item in control_data %}
+            <tr>
+                <td>{{ item.control.control_id_short or '' }}</td>
+                <td>{{ item.control.name }}</td>
+                <td>{{ item.passed }}/{{ item.total }}</td>
+                <td><span class="badge {{ item.control.state }}">{{ item.control.state }}</span></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+    {% endfor %}
+</section>
+
+<section>
+    <h2>Approved Policies</h2>
+    <table>
+        <thead>
+            <tr><th>Title</th><th>Category</th><th>Version</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+            {% for p in policies %}
+            <tr>
+                <td>{{ p.title }}</td>
+                <td>{{ p.category|replace('_', ' ')|title }}</td>
+                <td>{{ p.version }}</td>
+                <td><span class="badge {{ p.status }}">{{ p.status }}</span></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+
+<section>
+    <h2>System Inventory</h2>
+    <table>
+        <thead>
+            <tr><th>System</th><th>Provider</th><th>Risk Score</th><th>Data Classifications</th></tr>
+        </thead>
+        <tbody>
+            {% for s in systems %}
+            <tr>
+                <td>{{ s.name }}</td>
+                <td>{{ s.provider or '' }}</td>
+                <td>{{ "%.0f"|format(s.risk_score) if s.risk_score else '' }}</td>
+                <td>{{ s.data_classifications|join(', ') if s.data_classifications else '' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+
+<section>
+    <h2>Vendor Inventory</h2>
+    <table>
+        <thead>
+            <tr><th>Vendor</th><th>Status</th><th>Subprocessor</th><th>Certifications</th></tr>
+        </thead>
+        <tbody>
+            {% for v in vendors %}
+            <tr>
+                <td>{{ v.name }}</td>
+                <td><span class="badge {{ v.status }}">{{ v.status }}</span></td>
+                <td>{{ "Yes" if v.is_subprocessor else "No" }}</td>
+                <td>{{ v.certifications|join(', ') if v.certifications else '' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+
+{% if pentest_summary %}
+<section>
+    <h2>Security Assessment Summary</h2>
+    <div class="admin-grid">
+        {% for severity in ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'] %}
+        {% if pentest_summary.get(severity) %}
+        <div class="stat-card {{ 'warning' if severity in ('CRITICAL', 'HIGH') }}">
+            <h3>{{ severity }}</h3>
+            <span class="stat">{{ pentest_summary[severity] }}</span>
+        </div>
+        {% endif %}
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
+{% if evidence_gaps %}
+<section>
+    <h2>Evidence Gaps</h2>
+    <table>
+        <thead>
+            <tr><th>Test</th><th>Evidence Status</th></tr>
+        </thead>
+        <tbody>
+            {% for t in evidence_gaps %}
+            <tr>
+                <td>{{ t.name }}</td>
+                <td><span class="badge {{ t.evidence_status }}">{{ t.evidence_status }}</span></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endif %}
+{% endblock %}

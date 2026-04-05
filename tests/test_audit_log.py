@@ -259,3 +259,35 @@ def test_audit_log_api_includes_member_name(client, member, app_ctx):
     assert len(data) == 1
     assert "changed_by_name" in data[0]
     assert data[0]["changed_by_name"] == "Test User"
+
+
+def test_audit_log_api_null_name_for_system_entries(client, member, app_ctx):
+    """Entries without changed_by should have changed_by_name=null."""
+    _insert_audit_entry(changed_by=None)
+
+    resp = client.get("/api/audit-log",
+                      headers={"X-API-Key": member.api_key})
+    data = resp.get_json()
+    assert data[0]["changed_by"] is None
+    assert data[0]["changed_by_name"] is None
+
+
+def test_audit_log_api_unknown_member_id(client, member, app_ctx):
+    """Entries with an unresolvable changed_by should have changed_by_name=null."""
+    _insert_audit_entry(changed_by="nonexistent-member-id")
+
+    resp = client.get("/api/audit-log",
+                      headers={"X-API-Key": member.api_key})
+    data = resp.get_json()
+    assert data[0]["changed_by"] == "nonexistent-member-id"
+    assert data[0]["changed_by_name"] is None
+
+
+def test_audit_log_admin_shows_system_for_null_changed_by(client, admin_member, app_ctx):
+    """Admin audit log should show 'system' when changed_by is null."""
+    _insert_audit_entry(changed_by=None)
+
+    resp = client.get("/admin/audit-log",
+                      headers={"X-API-Key": admin_member.api_key})
+    assert resp.status_code == 200
+    assert b"system" in resp.data

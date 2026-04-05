@@ -3,7 +3,7 @@
 from flask import Blueprint, render_template, request, redirect, url_for, flash, session, g
 
 from app.models import db, Control, System, Vendor, Policy, TestRecord, Evidence, RiskRegister, TeamMember
-from app.auth import require_api_key, require_admin
+from app.auth import require_api_key, require_admin, require_client_or_admin
 from app.services import team_service
 
 admin_bp = Blueprint("admin", __name__)
@@ -102,16 +102,34 @@ def create_team_member():
     email = request.form.get("email", "").strip()
     role = request.form.get("role", "human")
     is_admin = request.form.get("is_compliance_admin") == "on"
+    company = request.form.get("company", "").strip() or None
+    expires_at_str = request.form.get("expires_at", "").strip()
 
     if not name or not email:
         flash("Name and email are required.", "error")
         return redirect(url_for("admin.team_management"))
 
-    if role not in ("human", "agent"):
-        flash("Role must be 'human' or 'agent'.", "error")
+    if role not in ("human", "agent", "client"):
+        flash("Role must be 'human', 'agent', or 'client'.", "error")
         return redirect(url_for("admin.team_management"))
 
-    member = team_service.create_member(name, email, role, is_compliance_admin=is_admin)
+    expires_at = None
+    if expires_at_str:
+        from datetime import datetime, timezone
+        try:
+            expires_at = datetime.strptime(expires_at_str, "%Y-%m-%d").replace(
+                hour=23, minute=59, second=59, tzinfo=timezone.utc
+            )
+        except ValueError:
+            flash("Invalid expiry date format.", "error")
+            return redirect(url_for("admin.team_management"))
+
+    member = team_service.create_member(
+        name, email, role,
+        is_compliance_admin=is_admin,
+        company=company,
+        expires_at=expires_at,
+    )
     flash(f"Created {member.name}. API key: {member.api_key}", "success")
     return redirect(url_for("admin.team_management"))
 
@@ -384,3 +402,94 @@ def admin_settings_update():
     update_portal_settings(data, updated_by=g.current_team_member.id)
     flash("Settings updated successfully.", "success")
     return redirect(url_for("admin.admin_settings"))
+
+
+# --- Client access (#651) ---
+
+
+@admin_bp.route("/client-login", methods=["GET", "POST"])
+def client_login():
+    """Client login page — paste API key to access compliance report."""
+    if request.method == "GET":
+        return render_template("admin/client_login.html",
+                               error=request.args.get("error"))
+
+    api_key = request.form.get("api_key", "").strip()
+    member = TeamMember.query.filter_by(api_key=api_key, is_active=True).first()
+
+    if not member or member.role != "client":
+        return render_template("admin/client_login.html",
+                               error="Invalid access key")
+
+    if member.is_expired:
+        return render_template("admin/client_login.html",
+                               error="Your access has expired. Contact the organization for renewal.")
+
+    session["api_key"] = api_key
+    return redirect(url_for("admin.client_report"))
+
+
+@admin_bp.route("/report")
+@require_api_key
+@require_client_or_admin
+def client_report():
+    """Comprehensive read-only compliance report for client reviewers."""
+    from app.services.compliance_engine import get_compliance_summary
+    from app.services.settings_service import get_portal_settings
+    from app.models import (
+        Control, Policy, System, Vendor, PentestFinding, TestRecord,
+    )
+    from sqlalchemy import func
+
+    summary = get_compliance_summary()
+
+    # Controls grouped by category with test pass rates
+    categories = {}
+    for category in ["security", "availability", "confidentiality", "privacy", "processing_integrity"]:
+        cat_controls = Control.query.filter_by(category=category).order_by(Control.name).all()
+        control_data = []
+        for ctrl in cat_controls:
+            tests = TestRecord.query.filter_by(control_id=ctrl.id).all()
+            control_data.append({
+                "control": ctrl,
+                "passed": sum(1 for t in tests if t.status == "passed"),
+                "total": len(tests),
+            })
+        categories[category] = control_data
+
+    policies = Policy.query.filter_by(status="approved").order_by(Policy.category, Policy.title).all()
+    systems = System.query.order_by(System.name).all()
+    vendors = Vendor.query.order_by(Vendor.name).all()
+
+    # Pentest severity counts from the most recent scan only
+    latest_scan = db.session.query(PentestFinding.scan_id).order_by(
+        PentestFinding.timestamp.desc()
+    ).limit(1).scalar()
+    if latest_scan:
+        pentest_rows = db.session.query(
+            PentestFinding.severity, func.count(PentestFinding.id)
+        ).filter(PentestFinding.scan_id == latest_scan).group_by(
+            PentestFinding.severity
+        ).all()
+        pentest_summary = {row[0]: row[1] for row in pentest_rows}
+    else:
+        pentest_summary = {}
+
+    # Evidence gaps
+    evidence_gaps = TestRecord.query.filter(
+        TestRecord.evidence_status.in_(["missing", "outdated", "due_soon"])
+    ).order_by(TestRecord.evidence_status).all()
+
+    portal = get_portal_settings()
+
+    return render_template(
+        "admin/client_report.html",
+        summary=summary,
+        categories=categories,
+        policies=policies,
+        systems=systems,
+        vendors=vendors,
+        pentest_summary=pentest_summary,
+        evidence_gaps=evidence_gaps,
+        portal=portal,
+    )

@@ -24,6 +24,19 @@ class TeamMember(db.Model):
     is_compliance_admin = db.Column(db.Boolean, default=False, nullable=False,
                                     comment="Grants access to portal configuration and admin routes")
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    expires_at = db.Column(db.DateTime(timezone=True))
+    company = db.Column(db.String(255))
+
+    @property
+    def is_expired(self):
+        if not self.expires_at:
+            return False
+        now = datetime.now(timezone.utc)
+        expires = self.expires_at
+        # Handle naive datetimes from SQLite (test environment)
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        return now > expires
 
     def __repr__(self):
         return f"<TeamMember {self.name} ({self.role})>"

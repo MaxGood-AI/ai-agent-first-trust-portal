@@ -6,7 +6,7 @@ import uuid
 from app.models import db, TeamMember
 
 
-def create_member(name, email, role, is_compliance_admin=False):
+def create_member(name, email, role, is_compliance_admin=False, company=None, expires_at=None):
     """Create a new team member with a generated API key."""
     member = TeamMember(
         id=str(uuid.uuid4()),
@@ -14,6 +14,8 @@ def create_member(name, email, role, is_compliance_admin=False):
         email=email,
         role=role,
         is_compliance_admin=is_compliance_admin,
+        company=company,
+        expires_at=expires_at,
     )
     db.session.add(member)
     db.session.commit()

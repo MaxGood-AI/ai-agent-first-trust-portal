@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Compliance Report Access{% endblock %}
+
+{% block content %}
+<div style="max-width: 400px; margin: 4rem auto; text-align: center;">
+    <h1>Compliance Report Access</h1>
+    <p>Enter your compliance report access key to view the detailed report.</p>
+
+    {% if error %}
+    <div class="flash error" style="margin: 1rem 0; padding: 0.75rem; background: #fed7d7; border-radius: 4px; color: #c53030;">
+        {{ error }}
+    </div>
+    {% endif %}
+
+    <form method="POST" action="{{ url_for('admin.client_login') }}" style="margin-top: 1.5rem;">
+        <div style="margin-bottom: 1rem;">
+            <input type="text" name="api_key" placeholder="Paste your access key here"
+                   required autofocus
+                   style="width: 100%; padding: 0.75rem; font-size: 1rem; border: 1px solid #e2e8f0; border-radius: 4px;">
+        </div>
+        <button type="submit" style="width: 100%; padding: 0.75rem; font-size: 1rem;">View Report</button>
+    </form>
+
+    <p style="margin-top: 2rem; color: #718096; font-size: 0.85rem;">
+        Don't have an access key? Contact the organization's compliance team to request one.
+    </p>
+</div>
+{% endblock %}

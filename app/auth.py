@@ -40,6 +40,11 @@ def require_api_key(f):
                 return redirect(url_for("admin.login", next=request.path, error="invalid"))
             return jsonify({"error": "Invalid or inactive API key"}), 401
 
+        if member.is_expired:
+            if _is_browser_request():
+                return redirect(url_for("admin.client_login", error="expired"))
+            return jsonify({"error": "API key has expired"}), 401
+
         g.current_team_member = member
         return f(*args, **kwargs)
     return decorated
@@ -58,5 +63,18 @@ def require_admin(f):
                 return redirect(url_for("admin.login", next=request.path, error="forbidden"))
             return jsonify({"error": "Admin access required"}), 403
 
+        return f(*args, **kwargs)
+    return decorated
+
+
+def require_client_or_admin(f):
+    """Allow access for client, human, or agent roles. Must follow @require_api_key."""
+    @functools.wraps(f)
+    def decorated(*args, **kwargs):
+        member = g.current_team_member
+        if member.role not in ("human", "agent", "client"):
+            if _is_browser_request():
+                return redirect(url_for("admin.client_login", error="forbidden"))
+            return jsonify({"error": "Insufficient permissions"}), 403
         return f(*args, **kwargs)
     return decorated
