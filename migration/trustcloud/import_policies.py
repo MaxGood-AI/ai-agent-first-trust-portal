@@ -12,7 +12,7 @@ import os
 import subprocess
 import sys
 
-TRUSTCLOUD_CLI = "python3 /Users/mishkinberteig/.claude/skills/trust-cloud/scripts/trustcloud_api.py"
+TRUSTCLOUD_CLI = os.environ.get("TRUSTCLOUD_CLI", "trustcloud-api")
 
 CATEGORY_MAP = {
     "security": "security",

@@ -8,11 +8,12 @@ Uses the TrustCloud API via the trust-cloud skill's CLI script.
 """
 
 import json
+import os
 import subprocess
 import sys
 import uuid
 
-TRUSTCLOUD_CLI = "python3 /Users/mishkinberteig/.claude/skills/trust-cloud/scripts/trustcloud_api.py"
+TRUSTCLOUD_CLI = os.environ.get("TRUSTCLOUD_CLI", "trustcloud-api")
 
 # Mapping of TrustCloud control names to TSC categories.
 # This is a starting heuristic — controls should be reviewed and re-categorized manually.

@@ -15,11 +15,11 @@ class TestRecord(db.Model):
     recommendation = db.Column(db.Text, comment="Guidance for passing this test")
     status = db.Column(
         db.String(50), default="pending",
-        comment="pending, passed, failed, not_applicable"
+        comment="Model: pending, passed, failed, not_applicable. Data import maps: success→passed, failure→failed, not_run→pending, excluded→not_applicable"
     )
     evidence_status = db.Column(
         db.String(50), default="missing",
-        comment="missing, submitted, outdated, due_soon"
+        comment="Model: missing, submitted, outdated, due_soon. Data import maps: up_to_date→submitted, not_required→submitted, due→due_soon"
     )
     last_executed_at = db.Column(db.DateTime)
     due_at = db.Column(db.DateTime)
