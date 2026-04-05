@@ -7,14 +7,16 @@ from cli.loaders.policies import PoliciesLoader
 from cli.loaders.vendors import VendorsLoader
 from cli.loaders.evidence import EvidenceLoader
 from cli.loaders.risk_register import RiskRegisterLoader
+from cli.loaders.pentest_findings import PentestFindingsLoader
 
 # Ordered: parents before children, FK targets before FK sources.
 LOADER_REGISTRY = [
     ControlsLoader,
-    SystemsLoader,       # stub — skips until System model exists
+    SystemsLoader,
     TestsLoader,
     PoliciesLoader,
-    VendorsLoader,       # stub — skips until Vendor model exists
+    VendorsLoader,
     EvidenceLoader,
-    RiskRegisterLoader,  # stub — skips until RiskRegister model exists
+    RiskRegisterLoader,
+    PentestFindingsLoader,
 ]

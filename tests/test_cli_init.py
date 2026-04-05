@@ -8,7 +8,7 @@ import pytest
 
 from app import create_app
 from app.config import TestConfig
-from app.models import db, Control, System, Vendor, TestRecord, Policy, Evidence, RiskRegister
+from app.models import db, Control, System, Vendor, TestRecord, Policy, Evidence, RiskRegister, PentestFinding
 
 
 @pytest.fixture
@@ -798,6 +798,80 @@ def test_skip_missing_table(app, data_dir):
         result = FakeLoader().load(str(data_dir))
         assert result["inserted"] == 0
         assert result["updated"] == 0
+
+
+# --- Pentest Findings Loader Tests ---
+
+
+def test_load_pentest_findings(app, data_dir):
+    """Load pentest findings from layered directory structure."""
+    layer1_dir = data_dir / "pentest-evidence" / "layer1"
+    layer1_dir.mkdir(parents=True)
+
+    write_json(layer1_dir / "scan-001-repo.json", {
+        "repo": "TestRepo",
+        "scan_id": "scan-001",
+        "timestamp": "2026-03-28T143840Z",
+        "finding_count": 2,
+        "findings": [
+            {
+                "severity": "HIGH",
+                "dependency": {"name": "pkg", "version": "1.0", "source_file": "package.json"},
+                "vulnerability": {"id": "CVE-2026-001", "summary": "Bad vuln"},
+                "remediation": "Upgrade pkg to 2.0",
+                "soc2_controls": ["CC7.1", "CC7.2"],
+            },
+            {
+                "severity": "LOW",
+                "dependency": {"name": "other", "version": "3.0", "source_file": "go.mod"},
+                "vulnerability": {"id": "CVE-2026-002", "summary": "Minor issue"},
+                "remediation": "Upgrade other to 4.0",
+                "soc2_controls": ["CC7.1"],
+            },
+        ],
+    })
+
+    with app.app_context():
+        from cli.loaders.pentest_findings import PentestFindingsLoader
+        result = PentestFindingsLoader().load(str(data_dir))
+
+        assert result["inserted"] == 2
+        findings = PentestFinding.query.all()
+        assert len(findings) == 2
+
+        high = PentestFinding.query.filter_by(severity="HIGH").first()
+        assert high.layer == 1
+        assert high.repo == "TestRepo"
+        assert high.scan_id == "scan-001"
+        assert high.summary == "Bad vuln"
+        assert high.remediation == "Upgrade pkg to 2.0"
+        assert high.soc2_controls == ["CC7.1", "CC7.2"]
+        assert high.source_file == "layer1/scan-001-repo.json"
+        # Full finding preserved in other_data
+        assert high.other_data["severity"] == "HIGH"
+        assert high.other_data["vulnerability"]["id"] == "CVE-2026-001"
+
+
+def test_load_pentest_findings_idempotent(app, data_dir):
+    """Running pentest loader twice produces same count."""
+    layer2_dir = data_dir / "pentest-evidence" / "layer2"
+    layer2_dir.mkdir(parents=True)
+
+    write_json(layer2_dir / "scan-idem.json", {
+        "scan_id": "scan-idem",
+        "findings": [{"severity": "MEDIUM", "remediation": "Fix it", "soc2_controls": []}],
+    })
+
+    with app.app_context():
+        from cli.loaders.pentest_findings import PentestFindingsLoader
+        loader = PentestFindingsLoader()
+        r1 = loader.load(str(data_dir))
+        assert r1["inserted"] == 1
+
+        r2 = loader.load(str(data_dir))
+        assert r2["updated"] == 1
+        assert r2["inserted"] == 0
+        assert PentestFinding.query.count() == 1
 
 
 # --- Risk Register Loader Tests ---
