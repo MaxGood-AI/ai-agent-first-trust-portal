@@ -1,6 +1,6 @@
 """Admin routes for managing compliance artifacts."""
 
-from flask import Blueprint, render_template, request, redirect, url_for, flash, session
+from flask import Blueprint, render_template, request, redirect, url_for, flash, session, g
 
 from app.models import db, Control, System, Vendor, Policy, TestRecord, Evidence, RiskRegister, TeamMember
 from app.auth import require_api_key, require_admin
@@ -350,3 +350,37 @@ def admin_audit_log():
         current_record_id=record_id or "",
         current_action=action_filter or "",
     )
+
+
+@admin_bp.route("/settings", methods=["GET"])
+@require_api_key
+@require_admin
+def admin_settings():
+    from app.services.settings_service import get_portal_settings, SOC2_STAGES
+    settings = get_portal_settings()
+    return render_template("admin/settings.html", settings=settings, soc2_stages=SOC2_STAGES)
+
+
+@admin_bp.route("/settings", methods=["POST"])
+@require_api_key
+@require_admin
+def admin_settings_update():
+    from app.services.settings_service import update_portal_settings
+    data = {
+        "company_legal_name": request.form.get("company_legal_name") or None,
+        "company_brand_name": request.form.get("company_brand_name") or None,
+        "contact_email": request.form.get("contact_email") or None,
+        "physical_address": request.form.get("physical_address") or None,
+        "website_url": request.form.get("website_url") or None,
+        "soc2_current_stage": request.form.get("soc2_current_stage", "not_started"),
+        "soc2_stage_dates": {
+            "type_1_completed": request.form.get("type_1_date") or None,
+            "type_2_completed": request.form.get("type_2_date") or None,
+        },
+        "legal_content_md": request.form.get("legal_content_md") or None,
+        "legal_external_url": request.form.get("legal_external_url") or None,
+        "ai_transparency_md": request.form.get("ai_transparency_md") or None,
+    }
+    update_portal_settings(data, updated_by=g.current_team_member.id)
+    flash("Settings updated successfully.", "success")
+    return redirect(url_for("admin.admin_settings"))

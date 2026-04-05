@@ -3,8 +3,29 @@
 
 {% block content %}
 <section class="hero">
-    <h1>{{ brand_name }} Trust Portal</h1>
-    <p>{{ company_name }} is committed to maintaining the highest standards of security, availability, confidentiality, privacy, and processing integrity.</p>
+    <h1>{{ portal.company_brand_name }} Trust Portal</h1>
+    <p>{{ portal.company_legal_name }} is committed to maintaining the highest standards of security, availability, confidentiality, privacy, and processing integrity.</p>
+</section>
+
+<section class="soc2-journey">
+    <h2>SOC 2 Compliance Journey</h2>
+    <div class="stepper">
+        {% for stage in portal.soc2_stages %}
+        {% if stage.key != 'not_started' %}
+        <div class="step {{ stage.status }}">
+            <div class="step-indicator">
+                {% if stage.status == 'completed' %}&#10003;{% elif stage.status == 'current' %}&#9679;{% else %}&#9675;{% endif %}
+            </div>
+            <div class="step-label">
+                {{ stage.label }}
+                {% if stage.date %}
+                <span class="step-date">{{ stage.date }}</span>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+        {% endfor %}
+    </div>
 </section>
 
 <section class="score-overview">
@@ -28,8 +49,14 @@
     </div>
 </section>
 
+<section class="ai-transparency-banner">
+    <h2>AI-Driven Compliance</h2>
+    <p>We use AI agents as formal participants in our compliance process, with full governance, human oversight, and traceable evidence chains.</p>
+    <p><a href="{{ url_for('portal.ai_transparency') }}">Learn About Our Approach</a></p>
+</section>
+
 <section class="contact">
     <h2>Questions?</h2>
-    <p>For compliance inquiries, contact <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>.</p>
+    <p>For compliance inquiries, contact <a href="mailto:{{ portal.contact_email }}">{{ portal.contact_email }}</a>.</p>
 </section>
 {% endblock %}

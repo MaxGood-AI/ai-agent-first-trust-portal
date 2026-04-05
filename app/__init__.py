@@ -36,4 +36,9 @@ def create_app(config_class=Config):
         "basePath": "/api",
     })
 
+    @app.context_processor
+    def inject_portal_settings():
+        from app.services.settings_service import get_portal_settings
+        return {"portal": get_portal_settings()}
+
     return app

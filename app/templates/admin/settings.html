@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Admin — Portal Settings{% endblock %}
+
+{% block content %}
+<h1>Portal Settings</h1>
+<p><a href="{{ url_for('admin.dashboard') }}">&larr; Back to Dashboard</a></p>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+{% if messages %}
+{% for category, message in messages %}
+<div class="flash {{ category }}">{{ message }}</div>
+{% endfor %}
+{% endif %}
+{% endwith %}
+
+<form method="post" action="{{ url_for('admin.admin_settings_update') }}">
+    <h2>Company Information</h2>
+    <div style="display: grid; gap: 0.75rem; max-width: 600px;">
+        <label>Legal Name:
+            <input type="text" name="company_legal_name" value="{{ settings.company_legal_name or '' }}" style="width: 100%;">
+        </label>
+        <label>Brand / Display Name:
+            <input type="text" name="company_brand_name" value="{{ settings.company_brand_name or '' }}" style="width: 100%;">
+        </label>
+        <label>Compliance Email:
+            <input type="email" name="contact_email" value="{{ settings.contact_email or '' }}" style="width: 100%;">
+        </label>
+        <label>Physical Address:
+            <input type="text" name="physical_address" value="{{ settings.physical_address or '' }}" style="width: 100%;">
+        </label>
+        <label>Website URL:
+            <input type="url" name="website_url" value="{{ settings.website_url or '' }}" style="width: 100%;">
+        </label>
+    </div>
+
+    <h2>SOC 2 Journey</h2>
+    <div style="display: grid; gap: 0.75rem; max-width: 600px;">
+        <label>Current Stage:
+            <select name="soc2_current_stage">
+                {% for stage in soc2_stages %}
+                <option value="{{ stage.key }}" {% if stage.key == settings.soc2_current_stage %}selected{% endif %}>
+                    {{ stage.label }}
+                </option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>Type 1 Completion Date:
+            <input type="date" name="type_1_date" value="{{ settings.soc2_stage_dates.get('type_1_completed', '') if settings.soc2_stage_dates else '' }}">
+        </label>
+        <label>Type 2 Completion Date:
+            <input type="date" name="type_2_date" value="{{ settings.soc2_stage_dates.get('type_2_completed', '') if settings.soc2_stage_dates else '' }}">
+        </label>
+    </div>
+
+    <h2>Legal Page</h2>
+    <div style="display: grid; gap: 0.75rem; max-width: 600px;">
+        <label>External URL (if set, /legal redirects here instead of rendering content):
+            <input type="url" name="legal_external_url" value="{{ settings.legal_external_url or '' }}" style="width: 100%;">
+        </label>
+        <label>Custom Content (Markdown — leave blank to use default):
+            <textarea name="legal_content_md" rows="10" style="width: 100%; font-family: monospace;">{{ settings.legal_content_md or '' }}</textarea>
+        </label>
+    </div>
+
+    <h2>AI Transparency Statement</h2>
+    <div style="display: grid; gap: 0.75rem; max-width: 600px;">
+        <label>Custom Content (Markdown — leave blank to use default):
+            <textarea name="ai_transparency_md" rows="10" style="width: 100%; font-family: monospace;">{{ settings.ai_transparency_md or '' }}</textarea>
+        </label>
+    </div>
+
+    <div style="margin-top: 1.5rem;">
+        <button type="submit">Save Settings</button>
+    </div>
+</form>
+{% endblock %}

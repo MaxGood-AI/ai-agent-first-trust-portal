@@ -6,7 +6,7 @@ import uuid
 from flask import Blueprint, jsonify, request, g
 
 from app.models import db, Control, Policy, TestRecord, Evidence, DecisionLogSession, DecisionLogEntry
-from app.auth import require_api_key
+from app.auth import require_api_key, require_admin
 
 logger = logging.getLogger(__name__)
 
@@ -536,6 +536,49 @@ def audit_log():
         "changed_by_name": members.get(e.changed_by) if e.changed_by else None,
         "changed_at": e.changed_at.isoformat() if e.changed_at else None,
     } for e in entries])
+
+
+@api_bp.route("/settings", methods=["GET"])
+@require_api_key
+def get_settings():
+    """Get portal settings.
+    ---
+    tags:
+      - Settings
+    security:
+      - ApiKeyAuth: []
+    responses:
+      200:
+        description: Current portal settings
+      401:
+        description: Missing or invalid API key
+    """
+    from app.services.settings_service import get_portal_settings
+    return jsonify(get_portal_settings())
+
+
+@api_bp.route("/settings", methods=["PUT"])
+@require_api_key
+@require_admin
+def update_settings():
+    """Update portal settings (admin only).
+    ---
+    tags:
+      - Settings
+    security:
+      - ApiKeyAuth: []
+    responses:
+      200:
+        description: Updated portal settings
+      401:
+        description: Missing or invalid API key
+      403:
+        description: Not a compliance admin
+    """
+    from app.services.settings_service import update_portal_settings, get_portal_settings as _get
+    data = request.get_json()
+    update_portal_settings(data, updated_by=g.current_team_member.id)
+    return jsonify(_get())
 
 
 @api_bp.route("/openapi.json")
