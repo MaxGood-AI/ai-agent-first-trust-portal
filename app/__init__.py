@@ -16,10 +16,12 @@ def create_app(config_class=Config):
     from app.routes.portal import portal_bp
     from app.routes.admin import admin_bp
     from app.routes.api import api_bp
+    from app.routes.crud import crud_bp
 
     app.register_blueprint(portal_bp)
     app.register_blueprint(admin_bp, url_prefix="/admin")
     app.register_blueprint(api_bp, url_prefix="/api")
+    app.register_blueprint(crud_bp, url_prefix="/api")
 
     Swagger(app, template={
         "info": {
