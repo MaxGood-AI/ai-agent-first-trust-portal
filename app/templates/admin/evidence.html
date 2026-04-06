@@ -4,8 +4,34 @@
 {% block content %}
 <h1>Evidence Management</h1>
 <p><a href="{{ url_for('admin.dashboard') }}">&larr; Back to Dashboard</a></p>
-<p>Tests requiring evidence submission or updates.</p>
 
+<h2>Submit Evidence</h2>
+<form method="POST" action="{{ url_for('admin.evidence_upload') }}" enctype="multipart/form-data">
+    <div style="display: flex; flex-direction: column; gap: 0.5rem; max-width: 600px;">
+        <label>Test Record:
+            <select name="test_record_id" required>
+                <option value="">— Select a test —</option>
+                {% for test in all_tests %}
+                <option value="{{ test.id }}">{{ test.name }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>Evidence Type:
+            <select name="evidence_type">
+                <option value="file">File</option>
+                <option value="screenshot">Screenshot</option>
+                <option value="link">Link / URL</option>
+                <option value="automated">Automated</option>
+            </select>
+        </label>
+        <label>Description: <input type="text" name="description" required placeholder="What does this evidence demonstrate?"></label>
+        <label>URL (for link evidence): <input type="url" name="url" placeholder="https://..."></label>
+        <label>File upload: <input type="file" name="file"></label>
+        <button type="submit">Submit Evidence</button>
+    </div>
+</form>
+
+<h2>Tests Needing Evidence ({{ tests|length }})</h2>
 {% if tests %}
 <table>
     <thead>
@@ -29,5 +55,41 @@
 </table>
 {% else %}
 <p>All evidence is current. No action needed.</p>
+{% endif %}
+
+<h2>Recent Evidence ({{ evidence|length }})</h2>
+{% if evidence %}
+<table>
+    <thead>
+        <tr>
+            <th>Description</th>
+            <th>Type</th>
+            <th>Test</th>
+            <th>File</th>
+            <th>Submitted</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for ev in evidence %}
+        <tr>
+            <td>{{ ev.description or '—' }}</td>
+            <td><span class="badge">{{ ev.evidence_type }}</span></td>
+            <td>{{ ev.test_record.name if ev.test_record else '—' }}</td>
+            <td>
+                {% if ev.file_data %}
+                    <a href="{{ url_for('admin.evidence_download', evidence_id=ev.id) }}">{{ ev.file_name or 'Download' }}</a>
+                {% elif ev.url %}
+                    <a href="{{ ev.url }}" target="_blank" rel="noopener">Link</a>
+                {% else %}
+                    —
+                {% endif %}
+            </td>
+            <td>{{ ev.collected_at.strftime('%Y-%m-%d %H:%M') if ev.collected_at else '—' }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>No evidence submitted yet.</p>
 {% endif %}
 {% endblock %}

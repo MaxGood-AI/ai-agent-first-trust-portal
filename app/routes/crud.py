@@ -1,9 +1,10 @@
 """CRUD API routes for all entity types."""
 
+import base64
 import uuid
 
-from flask import Blueprint, jsonify, request
-from sqlalchemy import inspect as sa_inspect
+from flask import Blueprint, jsonify, request, Response
+from sqlalchemy import inspect as sa_inspect, LargeBinary
 
 from app.auth import require_api_key
 from app.models import (
@@ -19,11 +20,25 @@ def _serialize(instance):
     mapper = sa_inspect(type(instance))
     result = {}
     for attr in mapper.column_attrs:
+        col = attr.columns[0]
+        if isinstance(col.type, LargeBinary):
+            result["has_file"] = getattr(instance, attr.key) is not None
+            continue
         value = getattr(instance, attr.key)
         if hasattr(value, "isoformat"):
             value = value.isoformat()
         result[attr.key] = value
     return result
+
+
+def decode_file_data(data):
+    """Decode base64 file_data in a request dict to bytes. Modifies in place."""
+    if "file_data" in data and isinstance(data["file_data"], str):
+        try:
+            data["file_data"] = base64.b64decode(data["file_data"])
+        except Exception:
+            return "Invalid base64 in file_data"
+    return None
 
 
 def _register_crud(model_class, plural_name, required_fields=None):
@@ -97,6 +112,10 @@ def _register_crud(model_class, plural_name, required_fields=None):
 
         if "id" not in data:
             data["id"] = str(uuid.uuid4())
+
+        err = decode_file_data(data)
+        if err:
+            return jsonify({"error": err}), 400
 
         mapper = sa_inspect(model_class)
         valid_columns = {attr.key for attr in mapper.column_attrs}

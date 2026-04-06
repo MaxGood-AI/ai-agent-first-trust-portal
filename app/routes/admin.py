@@ -1,6 +1,9 @@
 """Admin routes for managing compliance artifacts."""
 
-from flask import Blueprint, render_template, request, redirect, url_for, flash, session, g
+import uuid as _uuid
+from datetime import datetime, timezone
+
+from flask import Blueprint, render_template, request, redirect, url_for, flash, session, g, Response
 
 from app.models import db, Control, System, Vendor, Policy, TestRecord, Evidence, RiskRegister, TeamMember
 from app.auth import require_api_key, require_admin, require_client_or_admin
@@ -73,14 +76,87 @@ def dashboard():
 @require_api_key
 @require_admin
 def evidence_management():
-    """Evidence management view — shows tests needing evidence."""
+    """Evidence management view — shows tests needing evidence and existing evidence."""
     tests_needing_attention = TestRecord.query.filter(
         TestRecord.evidence_status.in_(["missing", "outdated", "due_soon"])
     ).order_by(TestRecord.evidence_status, TestRecord.due_at).all()
 
+    all_evidence = Evidence.query.order_by(Evidence.created_at.desc()).limit(100).all()
+    all_tests = TestRecord.query.order_by(TestRecord.name).all()
+
     return render_template(
         "admin/evidence.html",
         tests=tests_needing_attention,
+        evidence=all_evidence,
+        all_tests=all_tests,
+    )
+
+
+@admin_bp.route("/evidence/upload", methods=["POST"])
+@require_api_key
+@require_admin
+def evidence_upload():
+    """Upload evidence file via the admin UI."""
+    test_record_id = request.form.get("test_record_id", "").strip()
+    evidence_type = request.form.get("evidence_type", "file")
+    description = request.form.get("description", "").strip()
+    url = request.form.get("url", "").strip() or None
+
+    if not test_record_id or not description:
+        flash("Test record and description are required.", "error")
+        return redirect(url_for("admin.evidence_management"))
+
+    test = db.session.get(TestRecord, test_record_id)
+    if not test:
+        flash("Test record not found.", "error")
+        return redirect(url_for("admin.evidence_management"))
+
+    file_data = None
+    file_name = None
+    file_mime_type = None
+
+    uploaded_file = request.files.get("file")
+    if uploaded_file and uploaded_file.filename:
+        file_data = uploaded_file.read()
+        file_name = uploaded_file.filename
+        file_mime_type = uploaded_file.content_type or "application/octet-stream"
+
+    ev = Evidence(
+        id=str(_uuid.uuid4()),
+        test_record_id=test_record_id,
+        evidence_type=evidence_type,
+        description=description,
+        url=url,
+        file_data=file_data,
+        file_name=file_name,
+        file_mime_type=file_mime_type,
+        collected_at=datetime.now(timezone.utc),
+    )
+    db.session.add(ev)
+
+    test.evidence_status = "submitted"
+    db.session.commit()
+
+    flash(f"Evidence submitted: {description}", "success")
+    return redirect(url_for("admin.evidence_management"))
+
+
+@admin_bp.route("/evidence/<evidence_id>/download")
+@require_api_key
+@require_admin
+def evidence_download(evidence_id):
+    """Download an evidence file from the admin UI."""
+    ev = db.session.get(Evidence, evidence_id)
+    if not ev or not ev.file_data:
+        flash("Evidence file not found.", "error")
+        return redirect(url_for("admin.evidence_management"))
+
+    return Response(
+        ev.file_data,
+        mimetype=ev.file_mime_type or "application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{ev.file_name or evidence_id}"',
+        },
     )
 
 

@@ -2,8 +2,9 @@
 
 import logging
 import uuid
+from datetime import datetime, timezone
 
-from flask import Blueprint, jsonify, request, g
+from flask import Blueprint, jsonify, request, g, Response
 
 from app.models import db, Control, Policy, TestRecord, Evidence, DecisionLogSession, DecisionLogEntry
 from app.auth import require_api_key, require_admin
@@ -579,6 +580,295 @@ def update_settings():
     data = request.get_json()
     update_portal_settings(data, updated_by=g.current_team_member.id)
     return jsonify(_get())
+
+
+@api_bp.route("/tests/<test_id>/record-execution", methods=["POST"])
+@require_api_key
+def record_execution(test_id):
+    """Record the result of an externally-performed test execution.
+    ---
+    tags:
+      - Tests
+    security:
+      - ApiKeyAuth: []
+    parameters:
+      - name: test_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The test record ID
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - outcome
+            properties:
+              outcome:
+                type: string
+                enum: [success, failure]
+                description: Test result — success or failure
+              finding:
+                type: string
+                description: Description of what was found
+              comment:
+                type: string
+                description: Additional reviewer notes
+              evidence:
+                type: array
+                description: Optional evidence items to attach to this test
+                items:
+                  type: object
+                  required:
+                    - evidence_type
+                    - description
+                  properties:
+                    evidence_type:
+                      type: string
+                      enum: [link, file, screenshot, automated]
+                    description:
+                      type: string
+                    url:
+                      type: string
+                      description: URL for link-type evidence
+                    file_path:
+                      type: string
+                      description: Path for file-type evidence
+    responses:
+      200:
+        description: Updated test record with execution result and any created evidence
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                test:
+                  type: object
+                  description: Updated test record
+                evidence_created:
+                  type: integer
+                  description: Number of evidence items created (0 if none provided)
+      400:
+        description: Missing or invalid outcome
+      401:
+        description: Missing or invalid API key
+      404:
+        description: Test record not found
+    """
+    test = db.session.get(TestRecord, test_id)
+    if not test:
+        return jsonify({"error": "Test record not found"}), 404
+
+    data = request.get_json()
+    if not data or "outcome" not in data:
+        return jsonify({"error": "Missing required field: outcome"}), 400
+
+    outcome = data["outcome"]
+    if outcome not in ("success", "failure"):
+        return jsonify({"error": "outcome must be 'success' or 'failure'"}), 400
+
+    test.execution_status = "completed"
+    test.execution_outcome = outcome
+    test.status = "passed" if outcome == "success" else "failed"
+    test.last_executed_at = datetime.now(timezone.utc)
+
+    if "finding" in data:
+        test.finding = data["finding"]
+    if "comment" in data:
+        test.comment = data["comment"]
+
+    import base64
+
+    evidence_items = data.get("evidence", [])
+    for item in evidence_items:
+        if "evidence_type" not in item or "description" not in item:
+            return jsonify({"error": "Each evidence item requires evidence_type and description"}), 400
+
+        file_bytes = None
+        if "file_data" in item and isinstance(item["file_data"], str):
+            try:
+                file_bytes = base64.b64decode(item["file_data"])
+            except Exception:
+                return jsonify({"error": "Invalid base64 in evidence file_data"}), 400
+
+        ev = Evidence(
+            id=str(uuid.uuid4()),
+            test_record_id=test_id,
+            evidence_type=item["evidence_type"],
+            description=item["description"],
+            url=item.get("url"),
+            file_path=item.get("file_path"),
+            file_data=file_bytes,
+            file_name=item.get("file_name"),
+            file_mime_type=item.get("file_mime_type"),
+            collected_at=datetime.now(timezone.utc),
+        )
+        db.session.add(ev)
+
+    if evidence_items:
+        test.evidence_status = "submitted"
+
+    db.session.commit()
+
+    from app.routes.crud import _serialize
+    result = _serialize(test)
+    result["evidence_created"] = len(evidence_items)
+    return jsonify(result)
+
+
+@api_bp.route("/tests/<test_id>/execution-history")
+@require_api_key
+def execution_history(test_id):
+    """Get the execution history for a test record, derived from the audit log.
+    ---
+    tags:
+      - Tests
+    security:
+      - ApiKeyAuth: []
+    parameters:
+      - name: test_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The test record ID
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 20
+          maximum: 100
+        description: Maximum number of entries to return
+    responses:
+      200:
+        description: List of execution events
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                test_id:
+                  type: string
+                executions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      execution_outcome:
+                        type: string
+                      execution_status:
+                        type: string
+                      status:
+                        type: string
+                      finding:
+                        type: string
+                      comment:
+                        type: string
+                      changed_by:
+                        type: string
+                      changed_by_name:
+                        type: string
+                      changed_at:
+                        type: string
+                        format: date-time
+      401:
+        description: Missing or invalid API key
+      404:
+        description: Test record not found
+    """
+    test = db.session.get(TestRecord, test_id)
+    if not test:
+        return jsonify({"error": "Test record not found"}), 404
+
+    from app.models.audit_log import AuditLog
+
+    limit = min(int(request.args.get("limit", 20)), 100)
+
+    execution_fields = {"execution_status", "execution_outcome", "last_executed_at"}
+
+    entries = (
+        AuditLog.query
+        .filter_by(table_name="test_records", record_id=test_id)
+        .filter(AuditLog.action.in_(["UPDATE", "INSERT"]))
+        .order_by(AuditLog.changed_at.desc())
+        .all()
+    )
+
+    executions = []
+    for entry in entries:
+        new_vals = entry.new_values or {}
+        if not execution_fields.intersection(new_vals.keys()):
+            continue
+        executions.append({
+            "execution_outcome": new_vals.get("execution_outcome"),
+            "execution_status": new_vals.get("execution_status"),
+            "status": new_vals.get("status"),
+            "finding": new_vals.get("finding"),
+            "comment": new_vals.get("comment"),
+            "changed_by": entry.changed_by,
+            "changed_at": entry.changed_at.isoformat() if entry.changed_at else None,
+        })
+        if len(executions) >= limit:
+            break
+
+    from app.models.team_member import TeamMember
+    member_ids = {e["changed_by"] for e in executions if e["changed_by"]}
+    members = {}
+    if member_ids:
+        for m in TeamMember.query.filter(TeamMember.id.in_(member_ids)).all():
+            members[m.id] = m.name
+    for e in executions:
+        e["changed_by_name"] = members.get(e["changed_by"]) if e["changed_by"] else None
+
+    return jsonify({"test_id": test_id, "executions": executions})
+
+
+@api_bp.route("/evidence/<evidence_id>/download")
+@require_api_key
+def download_evidence(evidence_id):
+    """Download an evidence file stored in the database.
+    ---
+    tags:
+      - Evidence
+    security:
+      - ApiKeyAuth: []
+    parameters:
+      - name: evidence_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The evidence record ID
+    responses:
+      200:
+        description: The evidence file
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      404:
+        description: Evidence not found or has no file
+      401:
+        description: Missing or invalid API key
+    """
+    ev = db.session.get(Evidence, evidence_id)
+    if not ev:
+        return jsonify({"error": "Evidence not found"}), 404
+    if not ev.file_data:
+        return jsonify({"error": "No file stored for this evidence record"}), 404
+
+    return Response(
+        ev.file_data,
+        mimetype=ev.file_mime_type or "application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{ev.file_name or evidence_id}"',
+        },
+    )
 
 
 @api_bp.route("/openapi.json")
