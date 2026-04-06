@@ -16,6 +16,8 @@ class AuditLog(db.Model):
     changed_at = db.Column(
         db.DateTime(timezone=True), nullable=False, server_default=db.func.now()
     )
+    row_hash = db.Column(db.String(64), comment="SHA-256 hash of this entry's data + previous_hash")
+    previous_hash = db.Column(db.String(64), comment="row_hash of the preceding audit log entry")
 
     def __repr__(self):
         return f"<AuditLog {self.action} {self.table_name}/{self.record_id}>"

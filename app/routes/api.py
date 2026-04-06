@@ -540,6 +540,104 @@ def audit_log():
     } for e in entries])
 
 
+@api_bp.route("/audit-log/verify")
+@require_api_key
+def verify_audit_log():
+    """Verify the integrity of the audit log hash chain.
+    ---
+    tags:
+      - Audit
+    security:
+      - ApiKeyAuth: []
+    responses:
+      200:
+        description: Verification result
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum: [valid, broken, empty, no_hashes]
+                total_entries:
+                  type: integer
+                verified:
+                  type: integer
+                chain_head:
+                  type: string
+                  description: The most recent row_hash
+                first_break:
+                  type: object
+                  nullable: true
+                  description: Details of the first broken link, if any
+      401:
+        description: Missing or invalid API key
+    """
+    from app.models.audit_log import AuditLog
+
+    total = AuditLog.query.count()
+
+    if total == 0:
+        return jsonify({
+            "status": "empty",
+            "total_entries": 0,
+            "verified": 0,
+            "chain_head": None,
+            "first_break": None,
+        })
+
+    # Fetch only the hash columns in order — avoids loading full row data
+    rows = (
+        db.session.query(AuditLog.id, AuditLog.row_hash, AuditLog.previous_hash)
+        .order_by(AuditLog.id.asc())
+        .all()
+    )
+
+    # Check if hash chain is populated (pre-migration entries won't have hashes)
+    hashed_rows = [(r.id, r.row_hash, r.previous_hash) for r in rows if r.row_hash]
+
+    if not hashed_rows:
+        return jsonify({
+            "status": "no_hashes",
+            "total_entries": total,
+            "verified": 0,
+            "chain_head": None,
+            "first_break": None,
+            "message": "No hash chain data found. Entries predate the hash chain migration.",
+        })
+
+    genesis_hash = "0" * 64
+    verified = 0
+    first_break = None
+
+    for i, (entry_id, row_hash, previous_hash) in enumerate(hashed_rows):
+        expected_prev = hashed_rows[i - 1][1] if i > 0 else genesis_hash
+
+        if previous_hash != expected_prev:
+            first_break = {
+                "id": entry_id,
+                "position": i,
+                "issue": "Chain break: previous_hash does not match preceding entry's row_hash",
+                "expected": expected_prev,
+                "actual": previous_hash,
+            }
+            break
+
+        verified += 1
+
+    chain_head = hashed_rows[-1][1]
+
+    return jsonify({
+        "status": "valid" if first_break is None else "broken",
+        "total_entries": total,
+        "hashed_entries": len(hashed_rows),
+        "verified": verified,
+        "chain_head": chain_head,
+        "first_break": first_break,
+    })
+
+
 @api_bp.route("/settings", methods=["GET"])
 @require_api_key
 def get_settings():

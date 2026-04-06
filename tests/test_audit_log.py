@@ -291,3 +291,83 @@ def test_audit_log_admin_shows_system_for_null_changed_by(client, admin_member, 
                       headers={"X-API-Key": admin_member.api_key})
     assert resp.status_code == 200
     assert b"system" in resp.data
+
+
+# --- Hash chain verification tests ---
+
+def test_verify_empty_audit_log(client, member):
+    resp = client.get("/api/audit-log/verify",
+                      headers={"X-API-Key": member.api_key})
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["status"] == "empty"
+    assert data["total_entries"] == 0
+
+
+def test_verify_no_hashes(client, member, app_ctx):
+    """Pre-migration entries without hashes should report no_hashes."""
+    _insert_audit_entry()  # no row_hash or previous_hash
+    resp = client.get("/api/audit-log/verify",
+                      headers={"X-API-Key": member.api_key})
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["status"] == "no_hashes"
+    assert data["total_entries"] == 1
+
+
+def _insert_hashed_entry(prev_hash, table_name="controls", record_id="abc",
+                          action="INSERT", changed_at=None):
+    """Insert an audit entry with a valid hash chain link."""
+    import hashlib
+    row_data = prev_hash + table_name + record_id + action + '{"name": "test"}'
+    row_hash = hashlib.sha256(row_data.encode("utf-8")).hexdigest()
+    entry = AuditLog(
+        table_name=table_name,
+        record_id=record_id,
+        action=action,
+        new_values={"name": "test"},
+        changed_at=changed_at or datetime.now(timezone.utc),
+        previous_hash=prev_hash,
+        row_hash=row_hash,
+    )
+    db.session.add(entry)
+    db.session.commit()
+    return entry
+
+
+def test_verify_valid_chain(client, member, app_ctx):
+    """A properly linked hash chain should verify as valid."""
+    genesis = "0" * 64
+    e1 = _insert_hashed_entry(genesis, record_id="r1")
+    e2 = _insert_hashed_entry(e1.row_hash, record_id="r2")
+    e3 = _insert_hashed_entry(e2.row_hash, record_id="r3")
+
+    resp = client.get("/api/audit-log/verify",
+                      headers={"X-API-Key": member.api_key})
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["status"] == "valid"
+    assert data["verified"] == 3
+    assert data["chain_head"] == e3.row_hash
+
+
+def test_verify_broken_chain(client, member, app_ctx):
+    """A tampered previous_hash should be detected."""
+    genesis = "0" * 64
+    e1 = _insert_hashed_entry(genesis, record_id="r1")
+    # Tamper: use wrong previous_hash
+    _insert_hashed_entry("deadbeef" * 8, record_id="r2")
+
+    resp = client.get("/api/audit-log/verify",
+                      headers={"X-API-Key": member.api_key})
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["status"] == "broken"
+    assert data["verified"] == 1
+    assert data["first_break"] is not None
+    assert data["first_break"]["issue"] == "Chain break: previous_hash does not match preceding entry's row_hash"
+
+
+def test_verify_requires_auth(client):
+    resp = client.get("/api/audit-log/verify")
+    assert resp.status_code == 401
