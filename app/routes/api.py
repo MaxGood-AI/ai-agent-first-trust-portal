@@ -7,7 +7,10 @@ from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request, g, Response
 
-from app.models import db, Control, Policy, TestRecord, Evidence, DecisionLogSession, DecisionLogEntry
+from app.models import (
+    db, Control, Policy, TestRecord, Evidence, DecisionLogSession,
+    DecisionLogEntry, System, Vendor, TeamMember, AuditLog,
+)
 from app.auth import require_api_key, require_admin
 
 logger = logging.getLogger(__name__)
@@ -116,6 +119,291 @@ def compliance_score():
         "total_tests": total_tests,
         "passed_tests": passed_tests,
         "categories": categories,
+    })
+
+
+@api_bp.route("/compliance-journey")
+@require_api_key
+def compliance_journey():
+    """Return the current state of the SOC 2 compliance journey across all phases.
+    ---
+    tags:
+      - Compliance
+    security:
+      - ApiKeyAuth: []
+    responses:
+      200:
+        description: Full journey state with phase completion, next actions, and compliance score
+      401:
+        description: Missing or invalid API key
+    """
+    from app.services.settings_service import get_portal_settings
+
+    TSC_CATEGORIES = ["security", "availability", "confidentiality", "privacy", "processing_integrity"]
+
+    settings = get_portal_settings()
+
+    # Counts used across phases
+    total_controls = Control.query.count()
+    total_tests = TestRecord.query.count()
+    total_policies = Policy.query.count()
+    total_systems = System.query.count()
+    total_vendors = Vendor.query.count()
+    total_team_members = TeamMember.query.filter_by(is_active=True).count()
+    total_evidence = Evidence.query.count()
+    total_decision_log_sessions = DecisionLogSession.query.count()
+
+    passed_tests = TestRecord.query.filter_by(status="passed").count()
+    approved_policies = Policy.query.filter_by(status="approved").count()
+
+    tests_missing_evidence = TestRecord.query.filter_by(evidence_status="missing").count()
+    tests_with_evidence = total_tests - tests_missing_evidence
+    evidence_gaps = TestRecord.query.filter(
+        TestRecord.evidence_status.in_(["missing", "outdated", "due_soon"])
+    ).count()
+
+    # Category coverage
+    categories_with_policies = set()
+    for p in Policy.query.with_entities(Policy.category).distinct().all():
+        if p.category:
+            categories_with_policies.add(p.category)
+
+    categories_with_controls = set()
+    for c in Control.query.with_entities(Control.category).distinct().all():
+        if c.category:
+            categories_with_controls.add(c.category)
+
+    # Controls without tests
+    controls_with_tests = set()
+    for t in TestRecord.query.with_entities(TestRecord.control_id).distinct().all():
+        controls_with_tests.add(t.control_id)
+    controls_without_tests = total_controls - len(controls_with_tests)
+
+    # Compliance score
+    overall_score = round((passed_tests / total_tests * 100), 1) if total_tests > 0 else 0.0
+
+    # Audit log check (lightweight — just check latest entry has hash)
+    latest_audit = AuditLog.query.order_by(AuditLog.id.desc()).first()
+    audit_log_has_hashes = bool(latest_audit and latest_audit.row_hash)
+    audit_log_entries = AuditLog.query.count()
+
+    # Evidence due/outdated
+    evidence_due_soon = TestRecord.query.filter_by(evidence_status="due_soon").count()
+    evidence_outdated = TestRecord.query.filter_by(evidence_status="outdated").count()
+
+    # Policies due for review
+    policies_due_review = 0
+    for p in Policy.query.all():
+        if hasattr(p, "next_review_at") and p.next_review_at:
+            if p.next_review_at <= datetime.now(timezone.utc):
+                policies_due_review += 1
+
+    # --- Phase completion logic ---
+    settings_configured = bool(settings.get("company_legal_name"))
+
+    phases = {}
+
+    # Phase 1: Bootstrap
+    p1_checks = {
+        "portal_healthy": True,
+        "settings_configured": settings_configured,
+        "team_members_exist": total_team_members > 0,
+    }
+    p1_complete = all(p1_checks.values())
+
+    # Phase 2: Discovery
+    p2_checks = {
+        "systems_registered": total_systems > 0,
+        "vendors_registered": total_vendors > 0,
+        "systems_count": total_systems,
+        "vendors_count": total_vendors,
+    }
+    p2_complete = p2_checks["systems_registered"] and p2_checks["vendors_registered"]
+
+    # Phase 3: Policies
+    categories_missing_policies = [c for c in TSC_CATEGORIES if c not in categories_with_policies]
+    p3_checks = {
+        "policies_exist": total_policies > 0,
+        "policies_count": total_policies,
+        "policies_approved": approved_policies,
+        "policies_draft": total_policies - approved_policies,
+        "all_categories_covered": len(categories_missing_policies) == 0 and total_policies >= 5,
+        "categories_covered": sorted(categories_with_policies),
+        "categories_missing": categories_missing_policies,
+    }
+    p3_complete = (total_policies >= 5 and approved_policies == total_policies
+                   and len(categories_missing_policies) == 0)
+
+    # Phase 4: Controls & Tests
+    categories_missing_controls = [c for c in TSC_CATEGORIES if c not in categories_with_controls]
+    p4_checks = {
+        "controls_exist": total_controls > 0,
+        "controls_count": total_controls,
+        "tests_exist": total_tests > 0,
+        "tests_count": total_tests,
+        "controls_without_tests": controls_without_tests,
+        "all_categories_have_controls": len(categories_missing_controls) == 0,
+        "categories_with_controls": sorted(categories_with_controls),
+        "categories_missing_controls": categories_missing_controls,
+    }
+    p4_complete = (total_controls > 0 and total_tests > 0
+                   and controls_without_tests == 0
+                   and len(categories_missing_controls) == 0)
+
+    # Phase 5: Evidence Collection
+    p5_checks = {
+        "total_tests": total_tests,
+        "tests_with_evidence": tests_with_evidence,
+        "tests_missing_evidence": tests_missing_evidence,
+        "evidence_items_count": total_evidence,
+        "decision_log_sessions": total_decision_log_sessions,
+    }
+    p5_complete = total_tests > 0 and tests_missing_evidence == 0
+
+    # Phase 6: Gap Analysis
+    category_scores = {}
+    for cat in TSC_CATEGORIES:
+        cat_controls = Control.query.filter_by(category=cat).all()
+        cat_ids = [c.id for c in cat_controls]
+        if cat_ids:
+            cat_total = TestRecord.query.filter(TestRecord.control_id.in_(cat_ids)).count()
+            cat_passed = TestRecord.query.filter(
+                TestRecord.control_id.in_(cat_ids), TestRecord.status == "passed"
+            ).count()
+            category_scores[cat] = round((cat_passed / cat_total * 100), 1) if cat_total > 0 else 0.0
+        else:
+            category_scores[cat] = 0.0
+
+    p6_checks = {
+        "compliance_score": overall_score,
+        "tests_passed": passed_tests,
+        "tests_failed": TestRecord.query.filter_by(status="failed").count(),
+        "tests_pending": TestRecord.query.filter_by(status="pending").count(),
+        "evidence_gaps_count": evidence_gaps,
+        "category_scores": category_scores,
+    }
+    p6_complete = overall_score >= 80.0 and evidence_gaps == 0
+
+    # Phase 7: Audit Prep
+    soc2_stage = settings.get("soc2_current_stage", "not_started")
+    stage_keys = ["not_started", "policies_established", "collecting_point_in_time",
+                  "auditor_engaged", "type_1_completed", "collecting_continuous", "type_2_completed"]
+    stage_index = stage_keys.index(soc2_stage) if soc2_stage in stage_keys else 0
+
+    p7_checks = {
+        "audit_log_has_hashes": audit_log_has_hashes,
+        "audit_log_entries": audit_log_entries,
+        "all_policies_approved": approved_policies == total_policies and total_policies > 0,
+        "all_evidence_current": evidence_gaps == 0 and total_tests > 0,
+        "soc2_stage": soc2_stage,
+    }
+    p7_complete = (audit_log_has_hashes and p7_checks["all_policies_approved"]
+                   and p7_checks["all_evidence_current"] and stage_index >= 3)
+
+    # Phase 8: Ongoing
+    p8_checks = {
+        "policies_due_for_review": policies_due_review,
+        "evidence_due_soon": evidence_due_soon,
+        "evidence_outdated": evidence_outdated,
+    }
+
+    # Determine status for each phase
+    completion = [p1_complete, p2_complete, p3_complete, p4_complete,
+                  p5_complete, p6_complete, p7_complete]
+
+    # Current phase = first incomplete, or 8 if all done
+    current_phase = 8
+    for i, done in enumerate(completion):
+        if not done:
+            current_phase = i + 1
+            break
+
+    phase_data = [
+        ("1_bootstrap", p1_checks, p1_complete),
+        ("2_discovery", p2_checks, p2_complete),
+        ("3_policies", p3_checks, p3_complete),
+        ("4_controls_and_tests", p4_checks, p4_complete),
+        ("5_evidence_collection", p5_checks, p5_complete),
+        ("6_gap_analysis", p6_checks, p6_complete),
+        ("7_audit_prep", p7_checks, p7_complete),
+        ("8_ongoing", p8_checks, False),
+    ]
+
+    for i, (name, checks, complete) in enumerate(phase_data):
+        phase_num = i + 1
+        if complete:
+            status = "completed"
+        elif phase_num == current_phase:
+            status = "in_progress"
+        elif phase_num == 8 and current_phase == 8:
+            status = "in_progress"
+        else:
+            status = "not_started"
+        phases[name] = {"status": status, "checks": checks}
+
+    # Generate next_actions
+    next_actions = []
+    if current_phase == 1:
+        if not settings_configured:
+            next_actions.append("Configure portal settings with company information (update-settings)")
+        if total_team_members == 0:
+            next_actions.append("Create at least one team member via the admin UI at /admin/team")
+    elif current_phase == 2:
+        if total_systems == 0:
+            next_actions.append("Register your systems — cloud services, applications, databases (create via /api/systems)")
+        if total_vendors == 0:
+            next_actions.append("Register your vendors — third-party services that handle data (create via /api/vendors)")
+    elif current_phase == 3:
+        if total_policies < 5:
+            next_actions.append(f"Create SOC 2 policies. Only {total_policies} exist, need at least 5 covering all TSC categories.")
+        if categories_missing_policies:
+            next_actions.append(f"Missing policy coverage for: {', '.join(categories_missing_policies)}")
+        if approved_policies < total_policies:
+            next_actions.append(f"{total_policies - approved_policies} policies are not yet approved.")
+    elif current_phase == 4:
+        if categories_missing_controls:
+            next_actions.append(f"Create controls for: {', '.join(categories_missing_controls)}")
+        if controls_without_tests > 0:
+            next_actions.append(f"{controls_without_tests} controls have no test records. Create tests for all controls.")
+        if total_tests == 0:
+            next_actions.append("Create test records linked to controls with clear pass/fail criteria.")
+    elif current_phase == 5:
+        if tests_missing_evidence > 0:
+            next_actions.append(f"{tests_missing_evidence} tests are missing evidence. Run automated collectors and collect manual evidence.")
+    elif current_phase == 6:
+        if overall_score < 80:
+            next_actions.append(f"Compliance score is {overall_score}%. Review and remediate failed tests to reach 80%.")
+        if evidence_gaps > 0:
+            next_actions.append(f"{evidence_gaps} tests have evidence gaps (missing, outdated, or due soon).")
+    elif current_phase == 7:
+        if not audit_log_has_hashes:
+            next_actions.append("Verify audit log integrity (verify-audit-log).")
+        if not p7_checks["all_policies_approved"]:
+            next_actions.append("Ensure all policies are approved.")
+        if stage_index < 3:
+            next_actions.append(f"Update SOC 2 stage (currently: {soc2_stage}). Engage an auditor when ready.")
+    elif current_phase == 8:
+        if evidence_due_soon > 0:
+            next_actions.append(f"{evidence_due_soon} tests have evidence due soon.")
+        if evidence_outdated > 0:
+            next_actions.append(f"{evidence_outdated} tests have outdated evidence — re-collect.")
+        if policies_due_review > 0:
+            next_actions.append(f"{policies_due_review} policies are due for review.")
+        if not next_actions:
+            next_actions.append("Compliance program is healthy. Continue periodic evidence collection and policy reviews.")
+
+    phase_names = {1: "bootstrap", 2: "discovery", 3: "policies", 4: "controls_and_tests",
+                   5: "evidence_collection", 6: "gap_analysis", 7: "audit_prep", 8: "ongoing"}
+
+    return jsonify({
+        "journey": {
+            "current_phase": current_phase,
+            "current_phase_name": phase_names[current_phase],
+            "phases": phases,
+            "next_actions": next_actions[:3],
+            "compliance_score": overall_score,
+            "soc2_stage": soc2_stage,
+        }
     })
 
 
