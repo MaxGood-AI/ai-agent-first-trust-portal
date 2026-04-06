@@ -1,5 +1,6 @@
 """Internal API routes for programmatic access."""
 
+import base64
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -582,6 +583,71 @@ def update_settings():
     return jsonify(_get())
 
 
+def _create_evidence_items(items, test_record_id):
+    """Create Evidence records from a list of evidence item dicts.
+
+    Returns (created_count, error_message). If error_message is not None,
+    the caller should return a 400 response with that message.
+    """
+    for item in items:
+        if "evidence_type" not in item or "description" not in item:
+            return 0, "Each evidence item requires evidence_type and description"
+
+        file_bytes = None
+        if "file_data" in item and isinstance(item["file_data"], str):
+            try:
+                file_bytes = base64.b64decode(item["file_data"])
+            except Exception:
+                return 0, "Invalid base64 in evidence file_data"
+
+        ev = Evidence(
+            id=str(uuid.uuid4()),
+            test_record_id=test_record_id,
+            evidence_type=item["evidence_type"],
+            description=item["description"],
+            url=item.get("url"),
+            file_path=item.get("file_path"),
+            file_data=file_bytes,
+            file_name=item.get("file_name"),
+            file_mime_type=item.get("file_mime_type"),
+            collected_at=datetime.now(timezone.utc),
+        )
+        db.session.add(ev)
+
+    return len(items), None
+
+
+def _apply_execution(test, data):
+    """Apply execution result fields to a TestRecord.
+
+    Returns error_message or None on success.
+    """
+    outcome = data.get("outcome")
+    if not outcome:
+        return "Missing required field: outcome"
+    if outcome not in ("success", "failure"):
+        return "outcome must be 'success' or 'failure'"
+
+    test.execution_status = "completed"
+    test.execution_outcome = outcome
+    test.status = "passed" if outcome == "success" else "failed"
+    test.last_executed_at = datetime.now(timezone.utc)
+
+    if "finding" in data:
+        test.finding = data["finding"]
+    if "comment" in data:
+        test.comment = data["comment"]
+
+    evidence_items = data.get("evidence", [])
+    if evidence_items:
+        count, err = _create_evidence_items(evidence_items, test.id)
+        if err:
+            return err
+        test.evidence_status = "submitted"
+
+    return None
+
+
 @api_bp.route("/tests/<test_id>/record-execution", methods=["POST"])
 @require_api_key
 def record_execution(test_id):
@@ -663,60 +729,202 @@ def record_execution(test_id):
         return jsonify({"error": "Test record not found"}), 404
 
     data = request.get_json()
-    if not data or "outcome" not in data:
-        return jsonify({"error": "Missing required field: outcome"}), 400
+    if not data:
+        return jsonify({"error": "Request body required"}), 400
 
-    outcome = data["outcome"]
-    if outcome not in ("success", "failure"):
-        return jsonify({"error": "outcome must be 'success' or 'failure'"}), 400
-
-    test.execution_status = "completed"
-    test.execution_outcome = outcome
-    test.status = "passed" if outcome == "success" else "failed"
-    test.last_executed_at = datetime.now(timezone.utc)
-
-    if "finding" in data:
-        test.finding = data["finding"]
-    if "comment" in data:
-        test.comment = data["comment"]
-
-    import base64
-
-    evidence_items = data.get("evidence", [])
-    for item in evidence_items:
-        if "evidence_type" not in item or "description" not in item:
-            return jsonify({"error": "Each evidence item requires evidence_type and description"}), 400
-
-        file_bytes = None
-        if "file_data" in item and isinstance(item["file_data"], str):
-            try:
-                file_bytes = base64.b64decode(item["file_data"])
-            except Exception:
-                return jsonify({"error": "Invalid base64 in evidence file_data"}), 400
-
-        ev = Evidence(
-            id=str(uuid.uuid4()),
-            test_record_id=test_id,
-            evidence_type=item["evidence_type"],
-            description=item["description"],
-            url=item.get("url"),
-            file_path=item.get("file_path"),
-            file_data=file_bytes,
-            file_name=item.get("file_name"),
-            file_mime_type=item.get("file_mime_type"),
-            collected_at=datetime.now(timezone.utc),
-        )
-        db.session.add(ev)
-
-    if evidence_items:
-        test.evidence_status = "submitted"
+    err = _apply_execution(test, data)
+    if err:
+        return jsonify({"error": err}), 400
 
     db.session.commit()
 
     from app.routes.crud import _serialize
     result = _serialize(test)
-    result["evidence_created"] = len(evidence_items)
+    result["evidence_created"] = len(data.get("evidence", []))
     return jsonify(result)
+
+
+@api_bp.route("/tests/batch-record-execution", methods=["POST"])
+@require_api_key
+def batch_record_execution():
+    """Record execution results for multiple tests in one call.
+    ---
+    tags:
+      - Tests
+    security:
+      - ApiKeyAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - executions
+            properties:
+              executions:
+                type: array
+                items:
+                  type: object
+                  required:
+                    - test_id
+                    - outcome
+                  properties:
+                    test_id:
+                      type: string
+                    outcome:
+                      type: string
+                      enum: [success, failure]
+                    finding:
+                      type: string
+                    comment:
+                      type: string
+                    evidence:
+                      type: array
+                      items:
+                        type: object
+    responses:
+      200:
+        description: Per-item results with success/failure counts
+      400:
+        description: Missing executions array
+      401:
+        description: Missing or invalid API key
+    """
+    data = request.get_json()
+    if not data or "executions" not in data:
+        return jsonify({"error": "Missing required field: executions"}), 400
+
+    items = data["executions"]
+    if not isinstance(items, list):
+        return jsonify({"error": "executions must be an array"}), 400
+
+    results = []
+    succeeded = 0
+    failed = 0
+
+    for item in items:
+        test_id = item.get("test_id")
+        if not test_id:
+            results.append({"test_id": None, "status": "error", "message": "Missing test_id"})
+            failed += 1
+            continue
+
+        test = db.session.get(TestRecord, test_id)
+        if not test:
+            results.append({"test_id": test_id, "status": "error", "message": "Test record not found"})
+            failed += 1
+            continue
+
+        err = _apply_execution(test, item)
+        if err:
+            results.append({"test_id": test_id, "status": "error", "message": err})
+            failed += 1
+            continue
+
+        results.append({"test_id": test_id, "status": "ok", "outcome": item["outcome"]})
+        succeeded += 1
+
+    db.session.commit()
+
+    return jsonify({"results": results, "succeeded": succeeded, "failed": failed})
+
+
+@api_bp.route("/evidence/batch-submit", methods=["POST"])
+@require_api_key
+def batch_submit_evidence():
+    """Submit evidence for multiple tests in one call.
+    ---
+    tags:
+      - Evidence
+    security:
+      - ApiKeyAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - evidence
+            properties:
+              evidence:
+                type: array
+                items:
+                  type: object
+                  required:
+                    - test_record_id
+                    - evidence_type
+                    - description
+                  properties:
+                    test_record_id:
+                      type: string
+                    evidence_type:
+                      type: string
+                      enum: [link, file, screenshot, automated]
+                    description:
+                      type: string
+                    url:
+                      type: string
+                    file_data:
+                      type: string
+                      description: Base64-encoded file content
+                    file_name:
+                      type: string
+                    file_mime_type:
+                      type: string
+    responses:
+      200:
+        description: Per-item results with success/failure counts
+      400:
+        description: Missing evidence array
+      401:
+        description: Missing or invalid API key
+    """
+    data = request.get_json()
+    if not data or "evidence" not in data:
+        return jsonify({"error": "Missing required field: evidence"}), 400
+
+    items = data["evidence"]
+    if not isinstance(items, list):
+        return jsonify({"error": "evidence must be an array"}), 400
+
+    results = []
+    succeeded = 0
+    failed = 0
+    tests_updated = set()
+
+    for item in items:
+        test_record_id = item.get("test_record_id")
+        if not test_record_id:
+            results.append({"test_record_id": None, "status": "error", "message": "Missing test_record_id"})
+            failed += 1
+            continue
+
+        test = db.session.get(TestRecord, test_record_id)
+        if not test:
+            results.append({"test_record_id": test_record_id, "status": "error", "message": "Test record not found"})
+            failed += 1
+            continue
+
+        count, err = _create_evidence_items([item], test_record_id)
+        if err:
+            results.append({"test_record_id": test_record_id, "status": "error", "message": err})
+            failed += 1
+            continue
+
+        tests_updated.add(test_record_id)
+        results.append({"test_record_id": test_record_id, "status": "ok"})
+        succeeded += 1
+
+    for tid in tests_updated:
+        test = db.session.get(TestRecord, tid)
+        if test:
+            test.evidence_status = "submitted"
+
+    db.session.commit()
+
+    return jsonify({"results": results, "succeeded": succeeded, "failed": failed})
 
 
 @api_bp.route("/tests/<test_id>/execution-history")

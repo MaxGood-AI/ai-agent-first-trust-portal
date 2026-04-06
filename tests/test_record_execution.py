@@ -255,6 +255,161 @@ class TestExecutionHistory:
         assert resp.status_code == 401
 
 
+class TestBatchRecordExecution:
+    @pytest.fixture
+    def multiple_tests(self, app):
+        with app.app_context():
+            ctrl = Control(id="ctrl-batch", name="Batch Control", category="security")
+            db.session.add(ctrl)
+            for i in range(3):
+                tr = TestRecord(id=f"batch-test-{i}", name=f"Batch Test {i}", control_id="ctrl-batch")
+                db.session.add(tr)
+            db.session.commit()
+            return ["batch-test-0", "batch-test-1", "batch-test-2"]
+
+    def test_batch_all_succeed(self, client, auth_headers, multiple_tests):
+        resp = client.post("/api/tests/batch-record-execution", json={
+            "executions": [
+                {"test_id": "batch-test-0", "outcome": "success", "finding": "OK"},
+                {"test_id": "batch-test-1", "outcome": "failure", "finding": "Failed"},
+                {"test_id": "batch-test-2", "outcome": "success"},
+            ],
+        }, headers=auth_headers)
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["succeeded"] == 3
+        assert data["failed"] == 0
+        assert len(data["results"]) == 3
+
+    def test_batch_partial_failure(self, client, auth_headers, multiple_tests):
+        resp = client.post("/api/tests/batch-record-execution", json={
+            "executions": [
+                {"test_id": "batch-test-0", "outcome": "success"},
+                {"test_id": "nonexistent", "outcome": "success"},
+                {"test_id": "batch-test-1", "outcome": "invalid-outcome"},
+            ],
+        }, headers=auth_headers)
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["succeeded"] == 1
+        assert data["failed"] == 2
+        assert data["results"][0]["status"] == "ok"
+        assert data["results"][1]["status"] == "error"
+        assert data["results"][2]["status"] == "error"
+
+    def test_batch_empty_array(self, client, auth_headers):
+        resp = client.post("/api/tests/batch-record-execution", json={
+            "executions": [],
+        }, headers=auth_headers)
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["succeeded"] == 0
+        assert data["failed"] == 0
+
+    def test_batch_missing_executions(self, client, auth_headers):
+        resp = client.post("/api/tests/batch-record-execution", json={}, headers=auth_headers)
+        assert resp.status_code == 400
+
+    def test_batch_requires_auth(self, client):
+        resp = client.post("/api/tests/batch-record-execution", json={"executions": []})
+        assert resp.status_code == 401
+
+    def test_batch_with_evidence(self, client, auth_headers, multiple_tests, app):
+        resp = client.post("/api/tests/batch-record-execution", json={
+            "executions": [{
+                "test_id": "batch-test-0",
+                "outcome": "success",
+                "finding": "Verified",
+                "evidence": [{
+                    "evidence_type": "link",
+                    "description": "Scan report",
+                    "url": "https://example.com/report",
+                }],
+            }],
+        }, headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.get_json()["succeeded"] == 1
+
+        with app.app_context():
+            ev = Evidence.query.filter_by(test_record_id="batch-test-0").first()
+            assert ev is not None
+            assert ev.url == "https://example.com/report"
+
+
+class TestBatchSubmitEvidence:
+    @pytest.fixture
+    def multiple_tests(self, app):
+        with app.app_context():
+            ctrl = Control(id="ctrl-bev", name="Batch Ev Control", category="security")
+            db.session.add(ctrl)
+            for i in range(2):
+                tr = TestRecord(id=f"bev-test-{i}", name=f"Batch Ev Test {i}", control_id="ctrl-bev")
+                db.session.add(tr)
+            db.session.commit()
+            return ["bev-test-0", "bev-test-1"]
+
+    def test_batch_submit_multiple(self, client, auth_headers, multiple_tests, app):
+        resp = client.post("/api/evidence/batch-submit", json={
+            "evidence": [
+                {"test_record_id": "bev-test-0", "evidence_type": "link", "description": "Report A", "url": "https://a.com"},
+                {"test_record_id": "bev-test-1", "evidence_type": "link", "description": "Report B", "url": "https://b.com"},
+            ],
+        }, headers=auth_headers)
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["succeeded"] == 2
+        assert data["failed"] == 0
+
+        with app.app_context():
+            for tid in multiple_tests:
+                test = db.session.get(TestRecord, tid)
+                assert test.evidence_status == "submitted"
+
+    def test_batch_partial_failure(self, client, auth_headers, multiple_tests):
+        resp = client.post("/api/evidence/batch-submit", json={
+            "evidence": [
+                {"test_record_id": "bev-test-0", "evidence_type": "link", "description": "OK", "url": "https://a.com"},
+                {"test_record_id": "nonexistent", "evidence_type": "link", "description": "Bad"},
+            ],
+        }, headers=auth_headers)
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["succeeded"] == 1
+        assert data["failed"] == 1
+
+    def test_batch_with_file(self, client, auth_headers, multiple_tests, app):
+        b64 = base64.b64encode(b"csv data here").decode("ascii")
+        resp = client.post("/api/evidence/batch-submit", json={
+            "evidence": [{
+                "test_record_id": "bev-test-0",
+                "evidence_type": "file",
+                "description": "Export",
+                "file_data": b64,
+                "file_name": "export.csv",
+                "file_mime_type": "text/csv",
+            }],
+        }, headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.get_json()["succeeded"] == 1
+
+        with app.app_context():
+            ev = Evidence.query.filter_by(test_record_id="bev-test-0").first()
+            assert ev.file_data == b"csv data here"
+
+    def test_batch_empty(self, client, auth_headers):
+        resp = client.post("/api/evidence/batch-submit", json={"evidence": []}, headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.get_json()["succeeded"] == 0
+
+    def test_batch_missing_evidence(self, client, auth_headers):
+        resp = client.post("/api/evidence/batch-submit", json={}, headers=auth_headers)
+        assert resp.status_code == 400
+
+    def test_batch_requires_auth(self, client):
+        resp = client.post("/api/evidence/batch-submit", json={"evidence": []})
+        assert resp.status_code == 401
+
+
 class TestEvidenceDownload:
     def test_download_file(self, client, auth_headers, test_record, app):
         file_content = b"PNG screenshot data here"
