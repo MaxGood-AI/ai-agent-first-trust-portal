@@ -1,0 +1,11 @@
+{% macro th_tooltip(label, tooltip_key, tooltips) %}
+<th>
+    {{ label }}
+    {% if tooltips and tooltip_key in tooltips %}
+    <span class="tooltip-icon" tabindex="0" aria-label="{{ tooltips[tooltip_key] }}">
+        <span class="tooltip-trigger">&#9432;</span>
+        <span class="tooltip-content">{{ tooltips[tooltip_key] }}</span>
+    </span>
+    {% endif %}
+</th>
+{% endmacro %}

@@ -1,17 +1,18 @@
 {% extends "base.html" %}
+{% from "macros/tooltip.html" import th_tooltip %}
 {% block title %}Policies{% endblock %}
 
 {% block content %}
 <h1>Policy Library</h1>
-<p>All current, approved policies governing {{ brand_name }}'s compliance program.</p>
+<p>All current, approved policies governing the compliance program.</p>
 
 {% if policies %}
 <table>
     <thead>
         <tr>
             <th>Policy</th>
-            <th>Category</th>
-            <th>Version</th>
+            {{ th_tooltip("Category", "policy_category", tooltips) }}
+            {{ th_tooltip("Version", "policy_version", tooltips) }}
             <th>Approved</th>
             <th>Next Review</th>
         </tr>

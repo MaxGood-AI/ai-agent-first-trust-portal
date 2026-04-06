@@ -209,6 +209,35 @@ footer a { color: var(--primary); }
 .contact { text-align: center; padding: 2rem; }
 .contact a { color: var(--primary); }
 
+/* Info Tooltips (#648) */
+.tooltip-icon {
+    position: relative;
+    display: inline-block;
+    cursor: help;
+    margin-left: 4px;
+}
+.tooltip-trigger { font-size: 0.85em; opacity: 0.5; }
+.tooltip-content {
+    display: none;
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #333;
+    color: #fff;
+    padding: 8px 12px;
+    border-radius: 4px;
+    font-size: 0.85em;
+    font-weight: normal;
+    white-space: normal;
+    width: 280px;
+    z-index: 100;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    line-height: 1.4;
+}
+.tooltip-icon:hover .tooltip-content,
+.tooltip-icon:focus .tooltip-content { display: block; }
+
 /* SOC 2 Journey Stepper (#650) */
 .soc2-journey { text-align: center; margin: 2rem 0; }
 .stepper {

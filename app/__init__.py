@@ -41,4 +41,9 @@ def create_app(config_class=Config):
         from app.services.settings_service import get_portal_settings
         return {"portal": get_portal_settings()}
 
+    @app.context_processor
+    def inject_tooltips():
+        from app.tooltip_definitions import TOOLTIPS
+        return {"tooltips": TOOLTIPS}
+
     return app

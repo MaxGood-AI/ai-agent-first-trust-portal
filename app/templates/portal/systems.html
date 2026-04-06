@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "macros/tooltip.html" import th_tooltip %}
 {% block title %}Systems{% endblock %}
 
 {% block content %}
@@ -10,10 +11,10 @@
     <thead>
         <tr>
             <th>System</th>
-            <th>Provider</th>
+            {{ th_tooltip("Provider", "system_provider", tooltips) }}
             <th>Purpose</th>
-            <th>Type</th>
-            <th>Risk Score</th>
+            {{ th_tooltip("Type", "system_type", tooltips) }}
+            {{ th_tooltip("Risk Score", "system_risk_score", tooltips) }}
             <th>Group</th>
         </tr>
     </thead>
