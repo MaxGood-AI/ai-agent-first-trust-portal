@@ -1,21 +1,35 @@
-# Trust Portal
+# AI Agent-First Trust Portal
 
-A self-contained, white-label **SOC 2 trust portal and compliance management system** that runs as a standalone Docker deployment on any hosting provider.
+### Let AI Agents Get You to SOC 2 Type 2 Compliance!
 
-Designed for organizations using **AWS**, **GitHub**, **KanbanZone**, and **Claude Code + Codex** as part of their development workflow. Deploys with a single `docker compose up` — no external dependencies required.
+A self-contained, white-label **SOC 2 trust portal and compliance management system** designed to be driven by AI agents. Deploy with a single `docker compose up`, point your AI agents at the API, and let them manage your compliance program — collecting evidence, recording test results, tracking controls, and maintaining your audit trail.
+
+Built for small teams that use **Claude Code**, **Codex**, or other AI coding agents as part of their development workflow. The portal provides the structure; your AI agents do the work.
+
+**No compliance expertise required to get started.** The system ships with SOC 2 policy templates, automated evidence collectors, and an API designed for agent-first workflows — not clickthrough GUIs.
 
 ## Features
 
-- **Public Trust Portal** — Client-facing pages showing compliance status by SOC 2 Trust Service Criteria category
-- **Policy Library** — Version-controlled markdown policies organized by trust service criteria
-- **Automated Evidence Collection** — Optional collectors for AWS infrastructure and GitHub repositories
-- **Control & Test Tracking** — Database-backed tracking of all SOC 2 controls, tests, and evidence
-- **Decision Log** — Ingest AI agent session transcripts (Claude Code, Codex) as compliance audit trail
-- **Admin Dashboard** — Internal interface for managing compliance artifacts and reviewing gaps
+### Agent-First Compliance
+- **Full API for AI agents** — Every compliance operation (record test results, submit evidence, upload files, verify audit integrity) is available via REST API with API key auth
+- **Batch operations** — Record execution results and submit evidence for multiple tests in a single call
+- **Decision Log** — Automatically ingest AI agent session transcripts (Claude Code, Codex) as formal compliance audit trail
+- **Tamper-evident audit log** — SHA-256 hash chain on every compliance data change, with a verification endpoint to prove integrity
+- **Claude Code skill** — Companion [trust-portal skill](https://github.com/MaxGood-AI/ai-agent-first-trust-portal-skill) provides CLI commands for all API operations
+
+### Compliance Management
+- **Control & Test Tracking** — Database-backed SOC 2 controls, tests, and evidence with pass/fail execution recording
+- **Evidence file storage** — Upload evidence files (screenshots, exports, PDFs) directly to the database via API or admin UI
+- **Automated Evidence Collection** — Optional collectors for AWS infrastructure (20+ checks) and GitHub repositories
+- **Policy Library** — Version-controlled markdown policies organized by Trust Service Criteria category
+- **Governance Templates** — Ready-to-use CLAUDE.md and AGENTS.md templates for AI agent SOC 2 compliance
+
+### Trust Portal
+- **Public-facing portal** — Client-facing pages showing compliance status, policies, controls, systems, vendors, and risks
+- **Admin Dashboard** — Manage compliance artifacts, review evidence gaps, upload evidence with file picker
 - **Interactive API Documentation** — OpenAPI 3.0 spec with Swagger UI at `/api/docs/`
 - **White-Label** — Fully customizable branding via environment variables
-- **Self-Contained** — App + PostgreSQL in a single Docker Compose stack
-- **Governance Templates** — Ready-to-use CLAUDE.md and AGENTS.md templates for AI agent SOC 2 compliance
+- **Self-Contained** — App + PostgreSQL in a single Docker Compose stack, deploys anywhere
 
 ## Quick Start
 
@@ -93,45 +107,51 @@ Interactive API documentation is served at `/api/docs/` (Swagger UI) and the raw
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/health` | GET | Health check with database connectivity status |
+| `/api/health` | GET | Health check with database connectivity |
 | `/api/compliance-score` | GET | Overall and per-category compliance scores |
-| `/api/controls` | GET | List all SOC 2 controls |
 | `/api/gaps` | GET | Tests with missing or outdated evidence |
-| `/api/decision-log/ingest` | POST | Ingest pending session transcripts |
+| `/api/tests/<id>/record-execution` | POST | Record a test execution result (with optional evidence + file uploads) |
+| `/api/tests/<id>/execution-history` | GET | Execution history for a test (from audit log) |
+| `/api/tests/batch-record-execution` | POST | Record results for multiple tests at once |
+| `/api/evidence/batch-submit` | POST | Submit evidence to multiple tests at once |
+| `/api/evidence/<id>/download` | GET | Download an evidence file |
+| `/api/audit-log` | GET | Query compliance data change history |
+| `/api/audit-log/verify` | GET | Verify audit log hash chain integrity |
+| `/api/decision-log/upload` | POST | Upload a session transcript |
 | `/api/decision-log/sessions` | GET | List ingested decision log sessions |
-| `/api/decision-log/session/<id>` | GET | Get entries for a specific session |
+| `/api/settings` | GET/PUT | Portal configuration |
+
+CRUD endpoints (GET, POST, PUT, DELETE) are available for: `/api/controls`, `/api/tests`, `/api/evidence`, `/api/policies`, `/api/systems`, `/api/vendors`, `/api/risks`, `/api/pentest-findings`.
+
+Full interactive documentation at `/api/docs/` (Swagger UI).
 
 ## Project Structure
 
 ```
 app/                      Flask application
-  models/                 SQLAlchemy models (controls, policies, evidence, tests, decision log)
-  routes/                 Route blueprints (portal, admin, api)
+  models/                 SQLAlchemy models (controls, policies, evidence, tests, decision log, audit log)
+  routes/                 Route blueprints (portal, admin, api, crud)
   services/               Business logic (compliance scoring, evidence recording, transcript ingest)
-  templates/              Jinja2 templates
+  templates/              Jinja2 templates (admin dashboard, public portal)
   static/                 CSS/JS assets
-cli/                      CLI tools
+cli/                      CLI tools (init + export commands)
   loaders/                Data file loaders (one per entity type)
   schemas/                JSON Schema documentation for each data file format
 collectors/               Automated evidence collection scripts
-  aws_collector.py        IAM MFA, RDS encryption/backups, security groups (requires AWS creds)
+  aws_collector.py        20+ AWS checks: IAM MFA, RDS, S3, CloudTrail, Lambda, KMS, GuardDuty...
   github_collector.py     Branch protection, PR review evidence (requires GitHub token)
-  base_collector.py       Abstract base class for collectors
+  base_collector.py       Abstract base class for custom collectors
 decision-logs/            Session transcripts staged for ingestion (gitignored)
-migrations/               Alembic database migrations
-  versions/               Migration scripts
+migrations/               Alembic database migrations (auto-run on startup)
+  versions/               Sequential migration scripts (001-014)
 templates/governance/     AI agent governance document templates
   CLAUDE.md.template      Template for Claude Code governance
   AGENTS.md.template      Template for all AI agents (includes Codex Review Protocol)
   GOVERNANCE-SETUP.md     Step-by-step setup instructions
-policies/                 Markdown policy documents by TSC category
-  security/
-  availability/
-  confidentiality/
-  privacy/
-  processing-integrity/
-tests/                    Unit tests (pytest)
+tests/                    Unit tests (pytest, 320+ tests, 80%+ coverage)
 ```
+
+> **Note:** Policy markdown files are stored externally in your compliance data directory and loaded via `cli init`. Set the `POLICY_DIR` environment variable to point at your policy files for the portal to render them.
 
 ## Loading Compliance Data
 
