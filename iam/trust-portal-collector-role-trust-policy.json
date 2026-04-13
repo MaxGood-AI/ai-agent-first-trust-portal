@@ -1,0 +1,13 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowTaskRoleAssume",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::ACCOUNT_ID:role/trust-portal-task-role"
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}

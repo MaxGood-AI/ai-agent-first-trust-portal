@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block title %}Run {{ run.id[:8] }} — {{ name }}{% endblock %}
+
+{% block content %}
+<h1>Run {{ run.id[:8] }}&hellip;</h1>
+<p>
+    <a href="{{ url_for('admin.collectors_list') }}">&larr; All Collectors</a>
+    &middot;
+    <a href="{{ url_for('admin.collector_runs', name=name) }}">Run History</a>
+    &middot;
+    <a href="{{ url_for('admin.collector_configure_form', name=name) }}">Configuration</a>
+</p>
+
+<div class="run-summary">
+    <div class="run-summary-item">
+        <span class="label">Collector</span>
+        <span class="value">{{ name }}</span>
+    </div>
+    <div class="run-summary-item">
+        <span class="label">Status</span>
+        <span class="value">
+            {% if run.status == 'success' %}
+                <span class="status status-ok">Success</span>
+            {% elif run.status == 'partial' %}
+                <span class="status status-warn">Partial</span>
+            {% elif run.status == 'failure' %}
+                <span class="status status-err">Failure</span>
+            {% else %}
+                <span class="status">{{ run.status }}</span>
+            {% endif %}
+        </span>
+    </div>
+    <div class="run-summary-item">
+        <span class="label">Trigger</span>
+        <span class="value">{{ run.trigger_type }}</span>
+    </div>
+    <div class="run-summary-item">
+        <span class="label">Started</span>
+        <span class="value">{{ run.started_at.strftime('%Y-%m-%d %H:%M:%S UTC') }}</span>
+    </div>
+    <div class="run-summary-item">
+        <span class="label">Finished</span>
+        <span class="value">
+            {% if run.finished_at %}
+                {{ run.finished_at.strftime('%Y-%m-%d %H:%M:%S UTC') }}
+            {% else %}
+                <span class="text-muted">&mdash;</span>
+            {% endif %}
+        </span>
+    </div>
+    <div class="run-summary-item">
+        <span class="label">Checks</span>
+        <span class="value">
+            <strong>{{ run.check_pass_count }}</strong> pass,
+            <strong>{{ run.check_fail_count }}</strong> fail
+        </span>
+    </div>
+    <div class="run-summary-item">
+        <span class="label">Evidence items</span>
+        <span class="value">{{ run.evidence_count }}</span>
+    </div>
+</div>
+
+{% if run.error_message %}
+<div class="flash error">
+    <strong>Error:</strong> {{ run.error_message }}
+</div>
+{% endif %}
+
+<h2>Check Results</h2>
+
+{% if checks %}
+<table class="data-table">
+    <thead>
+        <tr>
+            <th>Check</th>
+            <th>Status</th>
+            <th>Target Test</th>
+            <th>Evidence</th>
+            <th>Message</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for check in checks %}
+        <tr>
+            <td><code>{{ check.check_name }}</code></td>
+            <td>
+                {% if check.status == 'pass' %}
+                    <span class="status status-ok">Pass</span>
+                {% elif check.status == 'fail' %}
+                    <span class="status status-err">Fail</span>
+                {% elif check.status == 'error' %}
+                    <span class="status status-warn">Error</span>
+                {% else %}
+                    <span class="status status-muted">{{ check.status }}</span>
+                {% endif %}
+            </td>
+            <td>
+                {% if check.target_test_id %}
+                    <code>{{ check.target_test_id[:8] }}&hellip;</code>
+                {% else %}
+                    <span class="text-muted">&mdash;</span>
+                {% endif %}
+            </td>
+            <td>
+                {% if check.evidence_id %}
+                    <code>{{ check.evidence_id[:8] }}&hellip;</code>
+                {% else %}
+                    <span class="text-muted">&mdash;</span>
+                {% endif %}
+            </td>
+            <td class="check-message">{{ check.message or '' }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p class="text-muted">No check results recorded for this run.</p>
+{% endif %}
+{% endblock %}

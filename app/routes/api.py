@@ -193,9 +193,15 @@ def compliance_journey():
 
     # Policies due for review
     policies_due_review = 0
+    _now_utc = datetime.now(timezone.utc)
     for p in Policy.query.all():
         if hasattr(p, "next_review_at") and p.next_review_at:
-            if p.next_review_at <= datetime.now(timezone.utc):
+            # Normalize naive datetimes from Postgres (timezone-less columns)
+            # so they can be compared against the timezone-aware "now".
+            nr = p.next_review_at
+            if nr.tzinfo is None:
+                nr = nr.replace(tzinfo=timezone.utc)
+            if nr <= _now_utc:
                 policies_due_review += 1
 
     # --- Phase completion logic ---
@@ -251,14 +257,24 @@ def compliance_journey():
                    and len(categories_missing_controls) == 0)
 
     # Phase 5: Evidence Collection
+    from app.services.collector_status import get_overview as _get_collector_overview
+    collector_overview = _get_collector_overview()
     p5_checks = {
         "total_tests": total_tests,
         "tests_with_evidence": tests_with_evidence,
         "tests_missing_evidence": tests_missing_evidence,
         "evidence_items_count": total_evidence,
         "decision_log_sessions": total_decision_log_sessions,
+        "collectors_total": collector_overview.total,
+        "collectors_configured": collector_overview.configured,
+        "collectors_enabled": collector_overview.enabled,
+        "collectors_running_successfully": collector_overview.running_successfully,
     }
-    p5_complete = total_tests > 0 and tests_missing_evidence == 0
+    p5_complete = (
+        total_tests > 0
+        and tests_missing_evidence == 0
+        and collector_overview.running_successfully > 0
+    )
 
     # Phase 6: Gap Analysis
     category_scores = {}
@@ -368,6 +384,11 @@ def compliance_journey():
         if total_tests == 0:
             next_actions.append("Create test records linked to controls with clear pass/fail criteria.")
     elif current_phase == 5:
+        if collector_overview.running_successfully == 0:
+            next_actions.append(
+                "Configure at least one evidence collector and run it successfully. "
+                "Start with the setup wizard at /admin/setup/collectors."
+            )
         if tests_missing_evidence > 0:
             next_actions.append(f"{tests_missing_evidence} tests are missing evidence. Run automated collectors and collect manual evidence.")
     elif current_phase == 6:

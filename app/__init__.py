@@ -21,11 +21,13 @@ def create_app(config_class=Config):
     from app.routes.admin import admin_bp
     from app.routes.api import api_bp
     from app.routes.crud import crud_bp
+    from app.routes.collectors_api import collectors_api_bp
 
     app.register_blueprint(portal_bp)
     app.register_blueprint(admin_bp, url_prefix="/admin")
     app.register_blueprint(api_bp, url_prefix="/api")
     app.register_blueprint(crud_bp, url_prefix="/api")
+    app.register_blueprint(collectors_api_bp, url_prefix="/api")
 
     Swagger(app, template={
         "info": {
@@ -45,5 +47,11 @@ def create_app(config_class=Config):
     def inject_tooltips():
         from app.tooltip_definitions import TOOLTIPS
         return {"tooltips": TOOLTIPS}
+
+    # Start the in-process collector scheduler. The scheduler is a no-op
+    # under TESTING and in the Flask reloader parent, so it only runs in
+    # real deployments and in the dev reloader child.
+    from app.services import collector_scheduler
+    collector_scheduler.start(app)
 
     return app

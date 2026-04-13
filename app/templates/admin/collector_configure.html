@@ -1,0 +1,328 @@
+{% extends "base.html" %}
+{% block title %}Configure {{ catalog_entry.label }}{% endblock %}
+
+{% block content %}
+{% if return_to %}
+<div class="wizard-chrome">
+    <a href="{{ return_to }}" class="wizard-back">&larr; Back to Setup</a>
+    <span class="wizard-step-label">Setup Wizard &middot; Configure {{ catalog_entry.label }}</span>
+</div>
+{% endif %}
+
+<h1>Configure: {{ catalog_entry.label }}</h1>
+<p>
+    <a href="{{ url_for('admin.collectors_list') }}">&larr; All Collectors</a>
+    {% if config %}
+        &middot;
+        <a href="{{ url_for('admin.collector_runs', name=name) }}">Run History</a>
+    {% endif %}
+</p>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+{% if messages %}
+<div class="flash-messages">
+    {% for category, message in messages %}
+    <div class="flash {{ category }}">{{ message }}</div>
+    {% endfor %}
+</div>
+{% endif %}
+{% endwith %}
+
+<p class="lede">{{ catalog_entry.description }}</p>
+
+{% if config and config.permission_check_at %}
+<div class="status-banner">
+    <strong>Last permission check:</strong>
+    {{ config.permission_check_at.strftime('%Y-%m-%d %H:%M UTC') }}
+    {% if config.permission_check_result and config.permission_check_result.all_passed %}
+        <span class="status status-ok">All checks passing</span>
+    {% else %}
+        <span class="status status-warn">Issues found</span>
+    {% endif %}
+</div>
+{% endif %}
+
+{% set is_aws_backed = name in ['aws', 'git'] %}
+{% set needs_aws_creds = name in ['aws', 'git'] %}
+
+{% if is_aws_backed %}
+<div id="environment-detection"
+     class="status-banner env-detection"
+     data-detect-url="{{ url_for('collectors_api.detect_environment') }}">
+    <strong>Environment:</strong>
+    <span class="env-detection-text">Detecting&hellip;</span>
+</div>
+{% endif %}
+
+<form method="POST" action="{{ url_for('admin.collector_configure_submit', name=name) }}" id="collector-form" class="collector-form">
+    {% if return_to %}<input type="hidden" name="return_to" value="{{ return_to }}">{% endif %}
+
+    {% set current_mode = config.credential_mode if config else ('task_role' if needs_aws_creds else 'none') %}
+
+    {% if needs_aws_creds %}
+    <h2>Credentials</h2>
+
+    <div class="form-row">
+        <label for="credential_mode">Credential mode</label>
+        <select id="credential_mode" name="credential_mode" required>
+            <option value="task_role" {% if current_mode == 'task_role' %}selected{% endif %}>
+                Task role (use the container's attached IAM role)
+            </option>
+            <option value="task_role_assume" {% if current_mode == 'task_role_assume' %}selected{% endif %}>
+                Assume a dedicated collector role (recommended for same-account AWS)
+            </option>
+            <option value="access_keys" {% if current_mode == 'access_keys' %}selected{% endif %}>
+                Provide access keys
+            </option>
+        </select>
+        <p class="help-text">
+            For ECS Fargate deployments in the same AWS account, use <strong>Assume a
+            dedicated collector role</strong>. The portal will use its task role to assume
+            a read-only scanning role you've provisioned (see
+            <code>iam/terraform/</code> in the repo).
+        </p>
+    </div>
+    {% elif name == 'platform' %}
+    <h2>Credentials (optional)</h2>
+    <div class="form-row">
+        <label for="credential_mode">Credential mode</label>
+        <select id="credential_mode" name="credential_mode">
+            <option value="none" {% if current_mode == 'none' %}selected{% endif %}>
+                None — probe public/unauthenticated health endpoints only
+            </option>
+            <option value="access_keys" {% if current_mode == 'access_keys' %}selected{% endif %}>
+                Bearer token or basic auth for authenticated health endpoints
+            </option>
+        </select>
+    </div>
+    {% else %}
+    <input type="hidden" name="credential_mode" value="none">
+    <div class="status-banner info">
+        This collector reads directly from the portal database and does not
+        require credentials.
+    </div>
+    {% endif %}
+
+    {% if needs_aws_creds %}
+    <div class="credential-mode-panel" data-mode="task_role_assume">
+        <div class="form-row">
+            <label for="role_arn">Collector role ARN</label>
+            <input type="text"
+                   id="role_arn"
+                   name="role_arn"
+                   placeholder="arn:aws:iam::123456789012:role/trust-portal-collector-role"
+                   autocomplete="off">
+            <p class="help-text">
+                The ARN of the read-only IAM role the portal's task role should assume.
+            </p>
+        </div>
+        <div class="form-row">
+            <label for="external_id">External ID (optional)</label>
+            <input type="text" id="external_id" name="external_id" autocomplete="off">
+        </div>
+        <div class="form-row">
+            <label for="session_name">Session name (optional)</label>
+            <input type="text"
+                   id="session_name"
+                   name="session_name"
+                   placeholder="trust-portal-{{ name }}"
+                   autocomplete="off">
+        </div>
+    </div>
+
+    <div class="credential-mode-panel" data-mode="access_keys">
+        <div class="form-row">
+            <label for="access_key_id">AWS Access Key ID</label>
+            <input type="text" id="access_key_id" name="access_key_id" autocomplete="off">
+        </div>
+        <div class="form-row">
+            <label for="secret_access_key">AWS Secret Access Key</label>
+            <input type="password" id="secret_access_key" name="secret_access_key" autocomplete="off">
+        </div>
+        <p class="help-text warning-text">
+            Storing long-lived access keys is less secure than using an IAM role.
+            Prefer <strong>task role</strong> or <strong>assume role</strong> modes when running on AWS.
+        </p>
+    </div>
+    {% endif %}
+
+    {% if name == 'platform' %}
+    <div class="credential-mode-panel" data-mode="access_keys">
+        <div class="form-row">
+            <label for="bearer_token">Bearer token (optional)</label>
+            <input type="password" id="bearer_token" name="bearer_token" autocomplete="off">
+            <p class="help-text">
+                Sent as <code>Authorization: Bearer &lt;token&gt;</code> to services
+                configured with <code>"auth": "bearer"</code>.
+            </p>
+        </div>
+        <div class="form-row">
+            <label for="basic_user">Basic auth username (optional)</label>
+            <input type="text" id="basic_user" name="basic_user" autocomplete="off">
+        </div>
+        <div class="form-row">
+            <label for="basic_password">Basic auth password (optional)</label>
+            <input type="password" id="basic_password" name="basic_password" autocomplete="off">
+        </div>
+    </div>
+    {% endif %}
+
+    {% if config and config.encrypted_credentials %}
+    <div class="status-banner info">
+        Credentials are already stored (encrypted). Leave the fields blank to
+        keep existing credentials; fill in new ones to replace them.
+    </div>
+    {% endif %}
+
+    {% if is_aws_backed %}
+    <h2>Scan Targets</h2>
+
+    <div class="form-row">
+        <label for="region">AWS Region</label>
+        <input type="text"
+               id="region"
+               name="region"
+               value="{{ (config.config or {}).get('region', '') if config else '' }}"
+               placeholder="ca-central-1">
+    </div>
+    {% endif %}
+
+    {% if name == 'git' %}
+    <div class="form-row">
+        <label for="repositories">Repositories to scan (optional)</label>
+        <textarea id="repositories" name="repositories" rows="4"
+                  placeholder="One repository name per line; leave blank to scan all accessible repositories.">{{ ((config.config or {}).get('repositories') or []) | join('\n') if config else '' }}</textarea>
+        <p class="help-text">
+            Leave blank to scan all CodeCommit repositories the collector role
+            can access. Useful when you want to limit scope during initial setup.
+        </p>
+    </div>
+    <div class="form-row">
+        <label for="lookback_days">Pull-request lookback window (days)</label>
+        <input type="number" id="lookback_days" name="lookback_days" min="1" max="365"
+               value="{{ (config.config or {}).get('lookback_days', 30) if config else 30 }}">
+    </div>
+    {% endif %}
+
+    {% if name == 'platform' %}
+    <h2>Services to Probe</h2>
+    <div class="form-row">
+        <label for="services_json">Services (JSON)</label>
+        <textarea id="services_json" name="services_json" rows="10"
+                  placeholder='[{"name": "maxgoodai", "url": "https://api.example.com", "health_path": "/api/health", "auth": "none"}]'>{{ ((config.config or {}).get('services') or []) | tojson(indent=2) if config else '[]' }}</textarea>
+        <p class="help-text">
+            Array of <code>{name, url, health_path, auth}</code> objects.
+            <code>auth</code> is one of <code>none</code>, <code>bearer</code>, or
+            <code>basic</code>.
+        </p>
+    </div>
+    <div class="form-row">
+        <label for="http_timeout_seconds">HTTP timeout (seconds)</label>
+        <input type="number" id="http_timeout_seconds" name="http_timeout_seconds"
+               min="1" max="60"
+               value="{{ (config.config or {}).get('http_timeout_seconds', 10) if config else 10 }}">
+    </div>
+    {% endif %}
+
+    {% if name == 'policy' %}
+    <h2>Policy Options</h2>
+    <div class="form-row">
+        <label for="review_warning_days">Review warning threshold (days)</label>
+        <input type="number" id="review_warning_days" name="review_warning_days"
+               min="1" max="365"
+               value="{{ (config.config or {}).get('review_warning_days', 30) if config else 30 }}">
+        <p class="help-text">
+            Flag policies whose <code>next_review_at</code> is within this many
+            days as "due soon".
+        </p>
+    </div>
+    {% endif %}
+
+    {% if name == 'vendor' %}
+    <h2>Vendor Options</h2>
+    <div class="form-row">
+        <label>
+            <input type="checkbox" name="probe_urls"
+                   {% if config and (config.config or {}).get('probe_urls') %}checked{% endif %}>
+            Probe vendor security page URLs
+        </label>
+        <p class="help-text">
+            When enabled, the collector makes an HTTP GET against each active
+            vendor's security page URL to verify reachability. Disabled by
+            default to avoid outbound traffic until you're ready for it.
+        </p>
+    </div>
+    {% endif %}
+
+    <h2>Schedule</h2>
+
+    <div class="form-row">
+        <label for="schedule_cron">Cron expression (UTC)</label>
+        <input type="text"
+               id="schedule_cron"
+               name="schedule_cron"
+               value="{{ config.schedule_cron or '' if config else '' }}"
+               placeholder="0 6 * * 1">
+        <p class="help-text">
+            Default: <code>0 6 * * 1</code> (every Monday at 06:00 UTC). Leave blank to disable.
+        </p>
+    </div>
+
+    <div class="form-row">
+        <label>
+            <input type="checkbox"
+                   name="enabled"
+                   {% if config and config.enabled %}checked{% endif %}>
+            Enabled
+        </label>
+    </div>
+
+    <div class="form-actions">
+        <button type="submit" class="btn-primary">Save Configuration</button>
+    </div>
+</form>
+
+<h2>Verify &amp; Run</h2>
+
+<div class="collector-actions">
+    {% if is_aws_backed %}
+    <button type="button" class="btn-secondary" id="test-connection-btn"
+            data-action-url="{{ url_for('collectors_api.test_connection', name=name) }}">
+        Test Connection
+    </button>
+    <button type="button" class="btn-secondary" id="probe-btn"
+            data-action-url="{{ url_for('collectors_api.probe_collector', name=name) }}">
+        Recheck Permissions
+    </button>
+    {% endif %}
+    <button type="button" class="btn-primary" id="run-now-btn"
+            data-action-url="{{ url_for('collectors_api.run_collector', name=name) }}">
+        Run Now
+    </button>
+</div>
+
+<div id="action-result"></div>
+
+{% if is_aws_backed %}
+<h2>Required IAM Permissions</h2>
+<p>
+    This collector exercises the following AWS permissions. Attach this policy
+    to your <code>trust-portal-collector-role</code> (or to the role in your
+    chosen credential mode) before running the collector.
+</p>
+
+<div class="policy-actions">
+    <button type="button" class="btn-secondary" id="load-policy-btn"
+            data-action-url="{{ url_for('collectors_api.collector_required_policy', name=name) }}">
+        Load IAM Policy
+    </button>
+    <button type="button" class="btn-secondary" id="copy-policy-btn" disabled>
+        Copy JSON
+    </button>
+</div>
+
+<pre id="policy-json" class="policy-preview">Click "Load IAM Policy" to view.</pre>
+{% endif %}
+
+<script src="{{ url_for('static', filename='js/collectors.js') }}"></script>
+{% endblock %}

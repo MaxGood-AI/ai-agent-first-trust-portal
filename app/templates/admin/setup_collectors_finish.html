@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}Review &amp; Run &mdash; Setup Wizard{% endblock %}
+
+{% block content %}
+<div class="wizard-chrome">
+    <a href="{{ url_for('admin.setup_collectors_welcome') }}" class="wizard-back">&larr; Back</a>
+    <span class="wizard-step-label">Setup Wizard &middot; Step 2 of 2</span>
+</div>
+
+<h1>Review &amp; Run</h1>
+
+<div class="wizard-progress">
+    <div class="wizard-step completed">
+        <div class="wizard-step-num">1</div>
+        <div class="wizard-step-title">Welcome</div>
+    </div>
+    <div class="wizard-step-sep"></div>
+    <div class="wizard-step completed">
+        <div class="wizard-step-num">2</div>
+        <div class="wizard-step-title">Configure Collectors</div>
+    </div>
+    <div class="wizard-step-sep"></div>
+    <div class="wizard-step current">
+        <div class="wizard-step-num">3</div>
+        <div class="wizard-step-title">Review &amp; Run</div>
+    </div>
+</div>
+
+<p class="lede">
+    Review your collector configuration below and trigger a first run to
+    verify everything works. You can always return to the wizard or edit
+    individual collectors later from the Evidence Collectors admin page.
+</p>
+
+{% if overview.configured == 0 %}
+<div class="flash error">
+    You haven't configured any collectors yet.
+    <a href="{{ url_for('admin.setup_collectors_welcome') }}">Back to setup &rarr;</a>
+</div>
+{% endif %}
+
+<table class="data-table">
+    <thead>
+        <tr>
+            <th>Collector</th>
+            <th>Configured</th>
+            <th>Enabled</th>
+            <th>Last Run</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for status in overview.statuses %}
+        <tr>
+            <td>
+                <strong>{{ status.label }}</strong>
+                <div class="row-subtext">{{ status.description }}</div>
+            </td>
+            <td>
+                {% if status.configured %}
+                    <span class="status status-ok">Yes</span>
+                {% else %}
+                    <span class="status status-none">No</span>
+                {% endif %}
+            </td>
+            <td>
+                {% if status.enabled %}
+                    <span class="status status-ok">Enabled</span>
+                {% elif status.configured %}
+                    <span class="status status-muted">Disabled</span>
+                {% else %}
+                    <span class="text-muted">&mdash;</span>
+                {% endif %}
+            </td>
+            <td>
+                {% if status.has_successful_run and status.last_run_at %}
+                    <span class="status status-ok">Success</span>
+                    <div class="help-text">{{ status.last_run_at[:19] | replace('T', ' ') }} UTC</div>
+                {% elif status.last_run_status == 'failure' %}
+                    <span class="status status-err">Failure</span>
+                {% elif status.last_run_status == 'partial' %}
+                    <span class="status status-warn">Partial</span>
+                {% else %}
+                    <span class="text-muted">Never run</span>
+                {% endif %}
+            </td>
+            <td>
+                {% if status.configured %}
+                    <button type="button"
+                            class="btn-secondary run-now-btn"
+                            data-collector="{{ status.name }}"
+                            data-run-url="{{ url_for('collectors_api.run_collector', name=status.name) }}">
+                        Run Now
+                    </button>
+                    <a class="btn-small"
+                       href="{{ url_for('admin.collector_configure_form', name=status.name, return_to=url_for('admin.setup_collectors_welcome')) }}">
+                        Edit
+                    </a>
+                {% else %}
+                    <a class="btn-small"
+                       href="{{ url_for('admin.collector_configure_form', name=status.name, return_to=url_for('admin.setup_collectors_welcome')) }}">
+                        Configure
+                    </a>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<div id="wizard-run-result"></div>
+
+<div class="form-actions">
+    <a class="btn-secondary" href="{{ url_for('admin.setup_collectors_welcome') }}">&larr; Back</a>
+    <a class="btn-primary" href="{{ url_for('admin.dashboard') }}">Finish &amp; Go to Dashboard</a>
+</div>
+
+<script src="{{ url_for('static', filename='js/collector_wizard.js') }}"></script>
+{% endblock %}

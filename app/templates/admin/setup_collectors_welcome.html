@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Set Up Evidence Collection{% endblock %}
+
+{% block content %}
+<div class="wizard-chrome">
+    <a href="{{ url_for('admin.dashboard') }}" class="wizard-back">&larr; Dashboard</a>
+    <span class="wizard-step-label">Setup Wizard &middot; Step 1 of 2</span>
+</div>
+
+<h1>Set Up Evidence Collection</h1>
+
+<p class="lede">
+    Evidence collectors are the heart of your SOC 2 compliance program. They
+    gather evidence automatically from your infrastructure on a schedule, so
+    you don't have to chase screenshots or spreadsheets every audit cycle.
+    Configure each collector below &mdash; you can start with just AWS and add
+    the others later.
+</p>
+
+<div class="wizard-progress">
+    <div class="wizard-step completed">
+        <div class="wizard-step-num">1</div>
+        <div class="wizard-step-title">Welcome</div>
+    </div>
+    <div class="wizard-step-sep"></div>
+    <div class="wizard-step current">
+        <div class="wizard-step-num">2</div>
+        <div class="wizard-step-title">Configure Collectors</div>
+    </div>
+    <div class="wizard-step-sep"></div>
+    <div class="wizard-step">
+        <div class="wizard-step-num">3</div>
+        <div class="wizard-step-title">Review &amp; Run</div>
+    </div>
+</div>
+
+<h2>Collectors ({{ overview.running_successfully }}/{{ overview.total }} ready)</h2>
+
+<div class="wizard-collector-list">
+    {% for status in overview.statuses %}
+    <div class="wizard-collector-card">
+        <div class="wizard-collector-header">
+            <h3>{{ status.label }}</h3>
+            {% if status.has_successful_run %}
+                <span class="status status-ok">Ready</span>
+            {% elif status.enabled %}
+                <span class="status status-warn">Configured, not yet run</span>
+            {% elif status.configured %}
+                <span class="status status-muted">Configured, disabled</span>
+            {% else %}
+                <span class="status status-none">Not configured</span>
+            {% endif %}
+        </div>
+        <p class="row-subtext">{{ status.description }}</p>
+        <div class="wizard-collector-actions">
+            <a class="btn-primary"
+               href="{{ url_for('admin.collector_configure_form', name=status.name, return_to=url_for('admin.setup_collectors_welcome')) }}">
+                {% if status.configured %}Edit{% else %}Configure{% endif %}
+            </a>
+            {% if status.has_successful_run and status.last_run_at %}
+                <span class="help-text">
+                    Last run: {{ status.last_run_at[:19] | replace('T', ' ') }} UTC
+                </span>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<div class="form-actions">
+    <a class="btn-secondary" href="{{ url_for('admin.dashboard') }}">Exit Setup</a>
+    <a class="btn-primary" href="{{ url_for('admin.setup_collectors_finish') }}">
+        Continue to Review &rarr;
+    </a>
+</div>
+{% endblock %}

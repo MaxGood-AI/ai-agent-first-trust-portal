@@ -17,10 +17,14 @@ from app.models.policy_version import PolicyVersion
 from app.models.team_member import TeamMember
 from app.models.audit_log import AuditLog
 from app.models.portal_settings import PortalSettings
+from app.models.collector_config import CollectorConfig
+from app.models.collector_run import CollectorRun
+from app.models.collector_check_result import CollectorCheckResult
 
 __all__ = [
     "db", "Control", "System", "Vendor", "vendor_systems", "Policy", "policy_controls",
     "Evidence", "TestRecord", "RiskRegister", "PentestFinding",
     "DecisionLogSession", "DecisionLogEntry", "PolicyVersion", "TeamMember",
     "AuditLog", "PortalSettings",
+    "CollectorConfig", "CollectorRun", "CollectorCheckResult",
 ]

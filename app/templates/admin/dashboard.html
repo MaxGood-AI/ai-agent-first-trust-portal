@@ -7,6 +7,75 @@
     <a href="{{ url_for('admin.logout') }}">Logout</a>
 </div>
 
+{% if collector_overview and collector_overview.needs_setup %}
+<div class="setup-banner" id="collector-setup-banner">
+    <div class="setup-banner-icon">&#9889;</div>
+    <div class="setup-banner-content">
+        <strong>Set up evidence collection</strong>
+        <p>
+            No evidence collectors are running yet. Configure at least one
+            collector to start producing SOC 2 evidence automatically.
+            {% if collector_overview.configured > 0 %}
+                ({{ collector_overview.configured }} of {{ collector_overview.total }}
+                configured &mdash; run them to complete setup.)
+            {% endif %}
+        </p>
+    </div>
+    <a class="btn-primary" href="{{ url_for('admin.setup_collectors_welcome') }}">
+        Start Setup
+    </a>
+</div>
+{% elif collector_overview %}
+<div class="collector-widget {% if collector_overview.any_failing %}has-failing{% endif %}">
+    <div class="collector-widget-header">
+        <h3>Evidence Collection</h3>
+        <a href="{{ url_for('admin.collectors_list') }}">Manage &rarr;</a>
+    </div>
+    <div class="collector-widget-body">
+        <div class="collector-widget-stat">
+            <span class="stat-label">Running</span>
+            <span class="stat-value">
+                {{ collector_overview.running_successfully }}/{{ collector_overview.total }}
+            </span>
+            <span class="stat-sub">successfully</span>
+        </div>
+        <div class="collector-widget-stat">
+            <span class="stat-label">Last Success</span>
+            <span class="stat-value">
+                {% if collector_overview.most_recent_success_at %}
+                    {{ collector_overview.most_recent_success_at[:10] }}
+                {% else %}
+                    &mdash;
+                {% endif %}
+            </span>
+            <span class="stat-sub">
+                {% if collector_overview.most_recent_success_at %}
+                    {{ collector_overview.most_recent_success_at[11:16] }} UTC
+                {% else %}
+                    no runs yet
+                {% endif %}
+            </span>
+        </div>
+        <div class="collector-widget-stat">
+            <span class="stat-label">Evidence (7d)</span>
+            <span class="stat-value">{{ collector_overview.evidence_last_7_days }}</span>
+            <span class="stat-sub">items collected</span>
+        </div>
+        <div class="collector-widget-stat">
+            <span class="stat-label">Enabled</span>
+            <span class="stat-value">{{ collector_overview.enabled }}</span>
+            <span class="stat-sub">of {{ collector_overview.total }} configured</span>
+        </div>
+    </div>
+    {% if collector_overview.any_failing %}
+    <div class="collector-widget-alert">
+        <strong>Attention:</strong> at least one collector's last run failed or was partial.
+        <a href="{{ url_for('admin.collectors_list') }}">Review</a>
+    </div>
+    {% endif %}
+</div>
+{% endif %}
+
 <div class="admin-grid">
     <div class="stat-card">
         <h3>Controls</h3>
@@ -36,6 +105,7 @@
 <h2>Quick Actions</h2>
 <ul>
     <li><a href="{{ url_for('admin.evidence_management') }}">Manage Evidence Gaps</a></li>
+    <li><a href="{{ url_for('admin.collectors_list') }}">Evidence Collectors</a></li>
     <li><a href="{{ url_for('admin.team_management') }}">Manage Team Members</a></li>
     <li><a href="{{ url_for('admin.admin_audit_log') }}">Audit Log</a></li>
     <li><a href="{{ url_for('admin.admin_settings') }}">Portal Settings</a></li>

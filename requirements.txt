@@ -14,6 +14,12 @@ alembic==1.14.1
 # AWS SDK (optional — evidence collection only)
 boto3==1.36.14
 
+# Credential encryption for collector configs (Fernet symmetric)
+cryptography==44.0.0
+
+# In-process scheduling for collector runs
+APScheduler==3.10.4
+
 # HTTP client (GitHub evidence collection)
 requests==2.32.3
 
