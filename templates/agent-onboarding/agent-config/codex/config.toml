@@ -1,0 +1,24 @@
+# Codex SessionStart hook: auto-pull every direct sub-repo of the workspace
+# and inject a status report into the agent's context. Symlinked from
+# .codex/config.toml at the workspace root.
+
+[[hooks.SessionStart]]
+matcher = "startup"
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = 'python3 "${CODEX_PROJECT_DIR:-$PWD}/scripts/sessionstart-repo-status.py"'
+timeout = 90
+
+[[hooks.SessionStart]]
+matcher = "resume"
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = 'python3 "${CODEX_PROJECT_DIR:-$PWD}/scripts/sessionstart-repo-status.py"'
+timeout = 90
+
+[[hooks.SessionStart]]
+matcher = "clear"
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = 'python3 "${CODEX_PROJECT_DIR:-$PWD}/scripts/sessionstart-repo-status.py"'
+timeout = 90
