@@ -4,7 +4,9 @@
 
 A self-contained, white-label **SOC 2 trust portal and compliance management system** designed to be driven by AI agents. Deploy with a single `docker compose up`, point your AI agents at the API, and let them manage your compliance program — collecting evidence, recording test results, tracking controls, and maintaining your audit trail.
 
-Built for small teams that use **Claude Code**, **Codex**, or other AI coding agents as part of their development workflow. The portal provides the structure; your AI agents do the work.
+Built for small teams that use **Claude Code** as part of their development workflow. The portal provides the structure; your AI agents do the work.
+
+> **Supported AI agent: Claude Code.** The session-driven parts of the evidence chain (auto-pull of repos at session start, decision-log capture at session end, banner-style status reporting to the user) rely on hooks that surface output to the user. As of **codex v0.125.0**, OpenAI Codex CLI does not display hook output (`systemMessage` / `additionalContext`) to the user in either `codex exec` or the TUI, so Codex is not a supported driver for these flows. OpenAI Codex is still used inside the Claude Code workflow for the independent pre-commit RED-team review (see the Codex Review Protocol in the governance templates).
 
 **No compliance expertise required to get started.** The system ships with SOC 2 policy templates, automated evidence collectors, and an API designed for agent-first workflows — not clickthrough GUIs.
 
@@ -13,7 +15,7 @@ Built for small teams that use **Claude Code**, **Codex**, or other AI coding ag
 ### Agent-First Compliance
 - **Full API for AI agents** — Every compliance operation (record test results, submit evidence, upload files, verify audit integrity) is available via REST API with API key auth
 - **Batch operations** — Record execution results and submit evidence for multiple tests in a single call
-- **Decision Log** — Automatically ingest AI agent session transcripts (Claude Code, Codex) as formal compliance audit trail
+- **Decision Log** — Automatically ingest AI agent session transcripts (Claude Code) as formal compliance audit trail
 - **Tamper-evident audit log** — SHA-256 hash chain on every compliance data change, with a verification endpoint to prove integrity
 - **Claude Code skill** — Companion [trust-portal skill](https://github.com/MaxGood-AI/ai-agent-first-trust-portal-skill) provides CLI commands for all API operations
 
@@ -264,7 +266,7 @@ class MyCollector(BaseCollector):
 
 ## AI Agent Governance Templates
 
-Trust Portal ships with template governance documents that establish the SOC 2 evidence chain for any organization using Claude Code + Codex.
+Trust Portal ships with template governance documents that establish the SOC 2 evidence chain for any organization using Claude Code as the primary AI coding agent (with OpenAI Codex used as the independent pre-commit RED-team reviewer, invoked from Claude Code).
 
 **Location:** `templates/governance/`
 

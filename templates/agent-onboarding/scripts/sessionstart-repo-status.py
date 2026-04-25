@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """
-SessionStart auto-pull hook for Claude Code and Codex.
+SessionStart auto-pull hook for Claude Code.
 
 Runs git fetch + fast-forward / rebase pull across every direct sub-repo of
 the workspace root. Stashes dirty working trees before pulling and restores
-them after. Never creates branches. Prints a concise status report to stdout
-which the calling agent receives as system-prompt context.
+them after. Never creates branches. Emits a Claude Code SessionStart hook
+JSON payload on stdout so the user sees a banner at session start and the
+agent receives the full report as additional context.
+
+Codex CLI is intentionally not supported: as of codex v0.125.0, hook output
+(systemMessage / additionalContext) is not surfaced to the user in either
+`codex exec` or the TUI.
 
 Behaviour:
   * Block flag /tmp/block-session-pull: print blocked message to stderr,
@@ -19,11 +24,15 @@ Behaviour:
     verbatim in the report; the repo is left in a recoverable state.
 
 Inputs:
-  Reads a JSON object from stdin (Claude/Codex hook input). Uses the "cwd"
+  Reads a JSON object from stdin (Claude Code hook input). Uses the "cwd"
   field as the workspace root. Falls back to $PWD if cwd is missing.
 
 Output:
-  Status report on stdout (omitted entirely when nothing notable).
+  A single JSON object on stdout with two channels:
+    * systemMessage: a one-line summary shown directly to the user as a
+      session-start banner (so the report is visible before the user types).
+    * hookSpecificOutput.additionalContext: the full multi-line report
+      injected into the agent's context.
   Errors and the block message on stderr.
   Exit 0 normally, exit 2 when blocked.
 """
@@ -334,6 +343,22 @@ def format_report(results: List[RepoResult]) -> str:
     return "\n".join(lines)
 
 
+def build_summary(results: List[RepoResult]) -> str:
+    """Build a one-line user-facing summary for the systemMessage channel."""
+    counts = {}
+    for r in results:
+        counts[r.category] = counts.get(r.category, 0) + 1
+
+    order = ("needs-attention", "errors", "locked", "pulled", "ahead-only")
+    pieces = [f"{counts[cat]} {cat}" for cat in order if counts.get(cat)]
+
+    if not pieces:
+        return "All repos up to date."
+    clean = counts.get("clean", 0)
+    suffix = f" ({clean} clean)" if clean else ""
+    return "Repo status: " + ", ".join(pieces) + suffix
+
+
 def emit_block_message_and_exit() -> None:
     try:
         ctime = time.strftime(
@@ -389,9 +414,14 @@ def main() -> int:
     with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
         results = list(ex.map(process_repo, repos))
 
-    report = format_report(results)
-    if report:
-        print(report)
+    output = {
+        "systemMessage": build_summary(results),
+        "hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "additionalContext": format_report(results) or "All repos up to date.",
+        },
+    }
+    print(json.dumps(output))
     return 0
 
 
