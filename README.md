@@ -6,7 +6,7 @@ A self-contained, white-label **SOC 2 trust portal and compliance management sys
 
 Built for small teams that use **Claude Code** as part of their development workflow. The portal provides the structure; your AI agents do the work.
 
-> **Supported AI agent: Claude Code.** The session-driven parts of the evidence chain (auto-pull of repos at session start, decision-log capture at session end, banner-style status reporting to the user) rely on hooks that surface output to the user. As of **codex v0.125.0**, OpenAI Codex CLI does not display hook output (`systemMessage` / `additionalContext`) to the user in either `codex exec` or the TUI, so Codex is not a supported driver for these flows. OpenAI Codex is still used inside the Claude Code workflow for the independent pre-commit RED-team review (see the Codex Review Protocol in the governance templates).
+> **Supported AI agent: Claude Code.** The session-driven parts of the evidence chain (auto-pull of repos at session start, decision-log capture at session end, banner-style status reporting to the user) rely on hooks that surface output to the user. OpenAI Codex CLI (v0.125.0) does not display hook output (`systemMessage` / `additionalContext`) to the user in either `codex exec` or the TUI, so Codex is not a supported driver for these flows. OpenAI Codex is used inside the Claude Code workflow for the independent pre-commit RED-team review (see the Codex Review Protocol in the governance templates).
 
 **No compliance expertise required to get started.** The system ships with SOC 2 policy templates, automated evidence collectors, and an API designed for agent-first workflows — not clickthrough GUIs.
 
