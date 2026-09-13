@@ -964,6 +964,64 @@ def test_load_pentest_findings_idempotent(app, data_dir):
         assert PentestFinding.query.count() == 1
 
 
+def test_load_pentest_findings_layer4_structured_fields(app, data_dir):
+    """Layer 4 findings carry structured remediation and summary; the loader
+    stores them as text, keeps the structure in other_data, and stays
+    deterministic across reruns."""
+    layer4_dir = data_dir / "pentest-evidence" / "layer4"
+    layer4_dir.mkdir(parents=True)
+
+    structured_remediation = {"file_path": "App/app/routes/user.py", "function_name": "unknown"}
+    write_json(layer4_dir / "scan-l4--agent.json", {
+        "scan_id": "scan-l4",
+        "repo_name": "",
+        "timestamp": "2026-06-15T130416Z",
+        "findings": [
+            {
+                "severity": "HIGH",
+                "file_path": "App/app/__init__.py",
+                "summary": "CORS misconfiguration enables data exfiltration",
+                "remediation": structured_remediation,
+                "soc2_controls": ["CC7.1"],
+            },
+            {
+                "severity": "MEDIUM",
+                "summary": {"title": "Structured summary", "detail": "x"},
+                "remediation": None,
+                "dependency": "not-a-dict",
+                "finding": "not-a-dict",
+                "vulnerability": "not-a-dict",
+            },
+            "a bare string finding",
+        ],
+    })
+
+    with app.app_context():
+        from cli.loaders.pentest_findings import PentestFindingsLoader
+        loader = PentestFindingsLoader()
+        result = loader.load(str(data_dir))
+        assert result["inserted"] == 3
+
+        high = PentestFinding.query.filter_by(severity="HIGH").first()
+        assert high.layer == 4
+        assert high.remediation == json.dumps(structured_remediation, sort_keys=True)
+        assert high.other_data["remediation"] == structured_remediation
+        assert high.file_path == "App/app/__init__.py"
+
+        medium = PentestFinding.query.filter_by(severity="MEDIUM").first()
+        assert medium.summary == str({"title": "Structured summary", "detail": "x"})
+        assert medium.remediation is None
+        assert medium.file_path is None
+
+        bare = PentestFinding.query.filter(PentestFinding.severity.is_(None)).first()
+        assert bare.summary == "a bare string finding"
+
+        rerun = loader.load(str(data_dir))
+        assert rerun["inserted"] == 0
+        assert rerun["updated"] == 3
+        assert PentestFinding.query.count() == 3
+
+
 # --- Risk Register Loader Tests ---
 
 
