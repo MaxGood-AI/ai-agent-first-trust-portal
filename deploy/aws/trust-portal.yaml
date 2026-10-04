@@ -513,7 +513,7 @@ Resources:
     Type: AWS::Lightsail::Certificate
     Condition: HasDomain
     Properties:
-      CertificateName: !Sub ${OrgPrefix}-${AppName}-${EnvironmentName}
+      CertificateName: !Sub ${OrgPrefix}-${AppName}-cert-${EnvironmentName}
       DomainName: !Ref DomainName
 
   DnsRecord:

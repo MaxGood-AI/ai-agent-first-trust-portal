@@ -112,7 +112,7 @@ overrides only that key, and the other values carry over.
 
    ```bash
    bash deploy/aws/certificate-dns.sh --region <region> \
-     --certificate-name <OrgPrefix>-<AppName>-<env> --hosted-zone-id <zone-id>
+     --certificate-name <OrgPrefix>-<AppName>-cert-<env> --hosted-zone-id <zone-id>
    ```
 
    Once `aws lightsail get-certificates --region <region> --certificate-name <name> --query 'certificates[0].certificateDetail.status' --output text`

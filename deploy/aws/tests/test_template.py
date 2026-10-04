@@ -466,6 +466,14 @@ class NamingTests(unittest.TestCase):
             self.assertTrue(bucket.endswith("-${AWS::AccountId}-${AWS::Region}"), bucket)
             self.assertLessEqual(len(self.render(bucket)), 63, bucket)
 
+    def test_lightsail_names_are_unique_across_resource_types(self):
+        # Lightsail resource names share one namespace per region: a certificate named like the
+        # container service makes whichever is created second fail with "already exists".
+        names = re.findall(r"^\s+(?:ServiceName|CertificateName|RelationalDatabaseName): !Sub (.+)$",
+                           TEMPLATE, re.MULTILINE)
+        self.assertEqual(len(names), 3)
+        self.assertEqual(len(set(names)), 3, names)
+
     def test_longest_names_fit_their_service_limits(self):
         roles = re.findall(r"RoleName: !Sub (.+)", TEMPLATE) + re.findall(r"RoleName: !Sub\n\s+- (\S+)", PIPELINE)
         for role in roles:
