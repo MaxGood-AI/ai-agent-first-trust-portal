@@ -32,12 +32,12 @@ could cause conflicts.
 
 <!-- CUSTOMIZE: Describe where this governance repo is hosted. Example:
 
-This parent directory (`~/Development`) is tracked in a git repository at
+This parent directory (the workspace root) is tracked in a git repository at
 `{{ GOVERNANCE_REPO_URL }}`. It contains only root-level governance files
 (CLAUDE.md, AGENTS.md, README.md); all sub-repos are excluded via `.gitignore`.
 -->
 
-This parent directory (`~/Development`) is tracked in a git repository. It contains only root-level governance files (CLAUDE.md, AGENTS.md, README.md); all sub-repos are excluded via `.gitignore`.
+This parent directory (the workspace root) is tracked in a git repository. It contains only root-level governance files (CLAUDE.md, AGENTS.md, README.md); all sub-repos are excluded via `.gitignore`.
 
 ## Repository Map
 

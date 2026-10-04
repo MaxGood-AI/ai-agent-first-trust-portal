@@ -44,8 +44,8 @@ The `scripts/` and `agent-config/` directories are tracked in git as part of you
 From the trust portal's `templates/agent-onboarding/` directory into your workspace root:
 
 ```bash
-WORKSPACE=~/Development            # adjust to wherever your governance repo is
-TRUST_PORTAL=~/Development/ai-agent-first-trust-portal   # adjust if needed
+WORKSPACE=/path/to/your/workspace                     # the workspace root: where your governance repo is cloned
+TRUST_PORTAL="$WORKSPACE/ai-agent-first-trust-portal"  # where the trust portal is cloned
 
 mkdir -p "$WORKSPACE/scripts" "$WORKSPACE/agent-config/claude"
 

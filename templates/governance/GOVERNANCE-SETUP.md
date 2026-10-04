@@ -22,11 +22,12 @@ Both files share most of their content. The key difference is that AGENTS.md inc
 
 ## Step 1: Create a Governance Repository
 
-Create a root directory that will hold all your organization's repos, and initialize it as a git repository:
+Choose a root directory that will hold all your organization's repos (the workspace root; any location works), set `WORKSPACE` to its path, and initialize it as a git repository. The commands below name every path from `$WORKSPACE`:
 
 ```bash
-mkdir ~/Development
-cd ~/Development
+export WORKSPACE=/path/to/your/workspace
+mkdir -p "$WORKSPACE"
+cd "$WORKSPACE"
 git init
 ```
 
@@ -36,12 +37,14 @@ Create a `.gitignore` that excludes all sub-repositories (your actual project re
 # Exclude all directories (sub-repos)
 */
 
+# Never track credentials
+.env
+
 # But track governance files
 !.gitignore
 !CLAUDE.md
 !AGENTS.md
 !README.md
-!.env
 ```
 
 This governance repo tracks only the root-level policy files. Your actual project repos are cloned inside this directory but excluded from the governance repo's tracking.
@@ -51,7 +54,7 @@ This governance repo tracks only the root-level policy files. Your actual projec
 Clone the Trust Portal repo into your development directory:
 
 ```bash
-cd ~/Development
+cd "$WORKSPACE"
 git clone <trust-portal-repo-url> trust-portal
 ```
 
@@ -60,8 +63,8 @@ git clone <trust-portal-repo-url> trust-portal
 Copy the template files to your development root:
 
 ```bash
-cp trust-portal/templates/governance/CLAUDE.md.template ~/Development/CLAUDE.md
-cp trust-portal/templates/governance/AGENTS.md.template ~/Development/AGENTS.md
+cp "$WORKSPACE/trust-portal/templates/governance/CLAUDE.md.template" "$WORKSPACE/CLAUDE.md"
+cp "$WORKSPACE/trust-portal/templates/governance/AGENTS.md.template" "$WORKSPACE/AGENTS.md"
 ```
 
 Now edit both files and replace all placeholders:
@@ -112,7 +115,7 @@ Fill in the Repository Map table with every repo in your development environment
 ## Step 5: Set Up KanbanZone Integration
 
 1. Get your KanbanZone API key from Settings > Organization Settings > Integrations
-2. Create a `.env` file in `~/Development`:
+2. Create a `.env` file in `$WORKSPACE`:
 
 ```bash
 KANBANZONE_API_KEY=your-api-key
@@ -130,10 +133,10 @@ The decision log captures every Claude Code session as formal compliance evidenc
 1. Create the hooks directory:
 
 ```bash
-mkdir -p ~/Development/.claude/hooks
+mkdir -p "$WORKSPACE/.claude/hooks"
 ```
 
-2. Create the export script at `~/Development/.claude/hooks/export-session.sh`:
+2. Create the export script at `$WORKSPACE/.claude/hooks/export-session.sh`:
 
 ```bash
 #!/bin/bash
@@ -146,8 +149,8 @@ TRANSCRIPT=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.st
 CWD=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('cwd',''))")
 REASON=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('reason',''))")
 
-# Only capture sessions from the development directory
-DEV_DIR="$HOME/Development"
+# Only capture sessions from the workspace root, two levels above this script
+DEV_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 if [[ "$CWD" != "$DEV_DIR"* ]]; then
     exit 0
 fi
@@ -178,10 +181,10 @@ METAEOF
 3. Make it executable:
 
 ```bash
-chmod +x ~/Development/.claude/hooks/export-session.sh
+chmod +x "$WORKSPACE/.claude/hooks/export-session.sh"
 ```
 
-4. Configure Claude Code to use the hook. Create or update `~/Development/.claude/settings.json`:
+4. Configure Claude Code to use the hook. Create or update `$WORKSPACE/.claude/settings.json`:
 
 ```json
 {
@@ -191,7 +194,7 @@ chmod +x ~/Development/.claude/hooks/export-session.sh
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "/path/to/your/Development/.claude/hooks/export-session.sh",
+                        "command": "/path/to/your/workspace/.claude/hooks/export-session.sh",
                         "timeout": 5000
                     }
                 ]
@@ -201,19 +204,19 @@ chmod +x ~/Development/.claude/hooks/export-session.sh
 }
 ```
 
-Replace `/path/to/your/Development` with the actual absolute path.
+Replace `/path/to/your/workspace` with the absolute path in `$WORKSPACE` (`echo "$WORKSPACE"` prints it).
 
 ## Step 7: Commit and Verify
 
 Commit the governance files to your governance repo:
 
 ```bash
-cd ~/Development
+cd "$WORKSPACE"
 git add CLAUDE.md AGENTS.md .gitignore
 git commit -m "Add AI agent governance documents for SOC 2 compliance"
 ```
 
-Verify the setup by starting a Claude Code session in `~/Development` and asking it to:
+Verify the setup by starting a Claude Code session in `$WORKSPACE` and asking it to:
 1. Read the CLAUDE.md and confirm it understands the conventions
 2. Check that the KanbanZone skill can access your board
 3. End the session and verify a transcript appears in `trust-portal/decision-logs/`
