@@ -1,21 +1,16 @@
-#!/bin/bash
+#!/bin/sh
+# Container entrypoint: load configuration, wait for the database, migrate,
+# provision the application role (when owner credentials are present in this
+# process's environment), then drop the owner credentials and exec the
+# command (gunicorn by default). The serving process never sees
+# DATABASE_OWNER_*; it refuses to start in production when its own database
+# role could alter the audit trail. Any failure exits non-zero, so a broken
+# release never reports healthy.
 set -e
 
-echo "Waiting for PostgreSQL..."
-until python3 -c "
-import os, psycopg2
-conn = psycopg2.connect(os.environ.get(
-    'DATABASE_URL',
-    'postgresql://trust_portal:password@db:5432/trust_portal'
-))
-conn.close()
-" 2>/dev/null; do
-    sleep 1
-done
-echo "PostgreSQL is ready."
+python -m cli db-wait --timeout 120
+python -m cli db-migrate
 
-echo "Running database migrations..."
-alembic upgrade head
-echo "Migrations complete."
+unset DATABASE_OWNER_URL DATABASE_OWNER_USER DATABASE_OWNER_PASSWORD
 
 exec "$@"

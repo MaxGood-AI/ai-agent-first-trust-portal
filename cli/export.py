@@ -28,7 +28,7 @@ def export_all(output_dir, include_audit_log=False):
     """Export all compliance tables to JSON files."""
     from app.models import (
         Control, TestRecord, Policy, System, Vendor,
-        Evidence, RiskRegister, db,
+        Evidence, RiskRegister,
     )
 
     os.makedirs(output_dir, exist_ok=True)
@@ -98,16 +98,19 @@ def _serialize_record(record, config_key):
 def _export_audit_log(output_dir):
     """Export the audit log as a separate JSON file."""
     from app.models.audit_log import AuditLog
-    records = AuditLog.query.order_by(AuditLog.changed_at).all()
+    from app.services.audit_chain import redact_values
+    records = AuditLog.query.order_by(AuditLog.id).all()
     data = [{
         "id": r.id,
         "table_name": r.table_name,
         "record_id": r.record_id,
         "action": r.action,
-        "old_values": r.old_values,
-        "new_values": r.new_values,
+        "old_values": redact_values(r.old_values),
+        "new_values": redact_values(r.new_values),
         "changed_by": r.changed_by,
         "changed_at": r.changed_at.isoformat() if r.changed_at else None,
+        "previous_hash": r.previous_hash,
+        "row_hash": r.row_hash,
     } for r in records]
     filepath = os.path.join(output_dir, "audit-log.json")
     with open(filepath, "w") as f:

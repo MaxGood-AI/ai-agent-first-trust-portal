@@ -14,6 +14,7 @@
 {% endwith %}
 
 <form method="post" action="{{ url_for('admin.admin_settings_update') }}">
+    {{ csrf_field() }}
     <h2>Company Information</h2>
     <div style="display: grid; gap: 0.75rem; max-width: 600px;">
         <label>Legal Name:
@@ -60,6 +61,18 @@
         <label>Custom Content (Markdown — leave blank to use default):
             <textarea name="legal_content_md" rows="10" style="width: 100%; font-family: monospace;">{{ settings.legal_content_md or '' }}</textarea>
         </label>
+    </div>
+
+    <h2>Public Sections</h2>
+    <p>Sections of the public trust portal that anyone can read. An unpublished section answers 404 and is left out of the navigation. The risk register is private by default.</p>
+    <input type="hidden" name="public_sections_form" value="1">
+    <div style="display: grid; gap: 0.5rem; max-width: 600px;">
+        {% for key, label, pages in public_sections %}
+        <label>
+            <input type="checkbox" name="public_sections" value="{{ key }}" {% if key in settings.public_sections %}checked{% endif %}>
+            {{ label }} <small>({{ pages }})</small>
+        </label>
+        {% endfor %}
     </div>
 
     <h2>AI Transparency Statement</h2>

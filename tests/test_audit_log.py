@@ -81,7 +81,7 @@ def test_audit_log_api_returns_entries(client, member, app_ctx):
     _insert_audit_entry(changed_at=now - timedelta(seconds=10))
     _insert_audit_entry(record_id="def-456", changed_at=now)
 
-    resp = client.get("/api/audit-log", headers={"X-API-Key": member.api_key})
+    resp = client.get("/api/audit-log", headers={"X-API-Key": member.issued_api_key})
     assert resp.status_code == 200
     data = resp.get_json()
     assert len(data) == 2
@@ -95,7 +95,7 @@ def test_audit_log_api_filters_by_table(client, member, app_ctx):
     _insert_audit_entry(table_name="policies", record_id="pol-1")
 
     resp = client.get("/api/audit-log?table=controls",
-                      headers={"X-API-Key": member.api_key})
+                      headers={"X-API-Key": member.issued_api_key})
     data = resp.get_json()
     assert len(data) == 1
     assert data[0]["table_name"] == "controls"
@@ -106,7 +106,7 @@ def test_audit_log_api_filters_by_record_id(client, member, app_ctx):
     _insert_audit_entry(record_id="bbb")
 
     resp = client.get("/api/audit-log?record_id=aaa",
-                      headers={"X-API-Key": member.api_key})
+                      headers={"X-API-Key": member.issued_api_key})
     data = resp.get_json()
     assert len(data) == 1
     assert data[0]["record_id"] == "aaa"
@@ -118,7 +118,7 @@ def test_audit_log_api_filters_by_action(client, member, app_ctx):
                          old_values={"name": "Old"}, new_values={"name": "New"})
 
     resp = client.get("/api/audit-log?action=UPDATE",
-                      headers={"X-API-Key": member.api_key})
+                      headers={"X-API-Key": member.issued_api_key})
     data = resp.get_json()
     assert len(data) == 1
     assert data[0]["action"] == "UPDATE"
@@ -130,7 +130,7 @@ def test_audit_log_api_filters_by_changed_by(client, member, app_ctx):
     _insert_audit_entry(changed_by="user-2", record_id="r2")
 
     resp = client.get("/api/audit-log?changed_by=user-1",
-                      headers={"X-API-Key": member.api_key})
+                      headers={"X-API-Key": member.issued_api_key})
     data = resp.get_json()
     assert len(data) == 1
     assert data[0]["changed_by"] == "user-1"
@@ -144,7 +144,7 @@ def test_audit_log_api_filters_by_since(client, member, app_ctx):
 
     since = (recent - timedelta(hours=1)).isoformat()
     resp = client.get(f"/api/audit-log?since={since}",
-                      headers={"X-API-Key": member.api_key})
+                      headers={"X-API-Key": member.issued_api_key})
     data = resp.get_json()
     assert len(data) == 1
     assert data[0]["record_id"] == "new-1"
@@ -155,22 +155,22 @@ def test_audit_log_api_pagination(client, member, app_ctx):
         _insert_audit_entry(record_id=f"rec-{i:03d}")
 
     # Default limit is 50
-    resp = client.get("/api/audit-log", headers={"X-API-Key": member.api_key})
+    resp = client.get("/api/audit-log", headers={"X-API-Key": member.issued_api_key})
     assert len(resp.get_json()) == 50
 
     # Custom limit
-    resp = client.get("/api/audit-log?limit=10", headers={"X-API-Key": member.api_key})
+    resp = client.get("/api/audit-log?limit=10", headers={"X-API-Key": member.issued_api_key})
     assert len(resp.get_json()) == 10
 
     # Max limit capped at 200
-    resp = client.get("/api/audit-log?limit=999", headers={"X-API-Key": member.api_key})
+    resp = client.get("/api/audit-log?limit=999", headers={"X-API-Key": member.issued_api_key})
     assert len(resp.get_json()) == 60  # only 60 exist, 200 cap not reached
 
 
 # --- Admin page tests ---
 
 def test_audit_log_admin_page_requires_admin(client, member):
-    resp = client.get("/admin/audit-log", headers={"X-API-Key": member.api_key})
+    resp = client.get("/admin/audit-log", headers={"X-API-Key": member.issued_api_key})
     # Non-admin gets 403 (API-key request, not browser)
     assert resp.status_code == 403
 
@@ -178,7 +178,7 @@ def test_audit_log_admin_page_requires_admin(client, member):
 def test_audit_log_admin_page_renders(client, admin_member, app_ctx):
     _insert_audit_entry()
     resp = client.get("/admin/audit-log",
-                      headers={"X-API-Key": admin_member.api_key})
+                      headers={"X-API-Key": admin_member.issued_api_key})
     assert resp.status_code == 200
     assert b"Audit Log" in resp.data
     assert b"controls" in resp.data
@@ -189,13 +189,13 @@ def test_audit_log_admin_page_filters(client, admin_member, app_ctx):
     _insert_audit_entry(table_name="policies", record_id="pol-1")
 
     resp = client.get("/admin/audit-log?table=policies",
-                      headers={"X-API-Key": admin_member.api_key})
+                      headers={"X-API-Key": admin_member.issued_api_key})
     assert resp.status_code == 200
     assert b"policies" in resp.data
 
 
 def test_audit_log_dashboard_link(client, admin_member):
-    resp = client.get("/admin/", headers={"X-API-Key": admin_member.api_key})
+    resp = client.get("/admin/", headers={"X-API-Key": admin_member.issued_api_key})
     assert resp.status_code == 200
     assert b"audit-log" in resp.data
 
@@ -243,7 +243,7 @@ def test_audit_log_admin_shows_member_name(client, admin_member, app_ctx):
     _insert_audit_entry(changed_by=admin_member.id)
 
     resp = client.get("/admin/audit-log",
-                      headers={"X-API-Key": admin_member.api_key})
+                      headers={"X-API-Key": admin_member.issued_api_key})
     assert resp.status_code == 200
     # Should show the member's name, not just the UUID
     assert b"Admin" in resp.data
@@ -254,7 +254,7 @@ def test_audit_log_api_includes_member_name(client, member, app_ctx):
     _insert_audit_entry(changed_by=member.id)
 
     resp = client.get("/api/audit-log",
-                      headers={"X-API-Key": member.api_key})
+                      headers={"X-API-Key": member.issued_api_key})
     data = resp.get_json()
     assert len(data) == 1
     assert "changed_by_name" in data[0]
@@ -266,7 +266,7 @@ def test_audit_log_api_null_name_for_system_entries(client, member, app_ctx):
     _insert_audit_entry(changed_by=None)
 
     resp = client.get("/api/audit-log",
-                      headers={"X-API-Key": member.api_key})
+                      headers={"X-API-Key": member.issued_api_key})
     data = resp.get_json()
     assert data[0]["changed_by"] is None
     assert data[0]["changed_by_name"] is None
@@ -277,7 +277,7 @@ def test_audit_log_api_unknown_member_id(client, member, app_ctx):
     _insert_audit_entry(changed_by="nonexistent-member-id")
 
     resp = client.get("/api/audit-log",
-                      headers={"X-API-Key": member.api_key})
+                      headers={"X-API-Key": member.issued_api_key})
     data = resp.get_json()
     assert data[0]["changed_by"] == "nonexistent-member-id"
     assert data[0]["changed_by_name"] is None
@@ -288,84 +288,62 @@ def test_audit_log_admin_shows_system_for_null_changed_by(client, admin_member, 
     _insert_audit_entry(changed_by=None)
 
     resp = client.get("/admin/audit-log",
-                      headers={"X-API-Key": admin_member.api_key})
+                      headers={"X-API-Key": admin_member.issued_api_key})
     assert resp.status_code == 200
     assert b"system" in resp.data
 
 
 # --- Hash chain verification tests ---
 
-def test_verify_empty_audit_log(client, member):
+def test_verify_reports_unsupported_on_sqlite(client, app_ctx):
+    """Chain verification recomputes hashes in PostgreSQL (see test_audit_chain_pg.py)."""
+    admin = team_service.create_member("Admin", "admin-v@example.com", "human", is_compliance_admin=True)
     resp = client.get("/api/audit-log/verify",
-                      headers={"X-API-Key": member.api_key})
+                      headers={"X-API-Key": admin.issued_api_key})
     assert resp.status_code == 200
-    data = resp.get_json()
-    assert data["status"] == "empty"
-    assert data["total_entries"] == 0
+    assert resp.get_json()["status"] == "unsupported"
 
 
-def test_verify_no_hashes(client, member, app_ctx):
-    """Pre-migration entries without hashes should report no_hashes."""
-    _insert_audit_entry()  # no row_hash or previous_hash
-    resp = client.get("/api/audit-log/verify",
-                      headers={"X-API-Key": member.api_key})
-    assert resp.status_code == 200
-    data = resp.get_json()
-    assert data["status"] == "no_hashes"
-    assert data["total_entries"] == 1
+def test_verify_rejects_bad_parameters(client, app_ctx):
+    admin = team_service.create_member("Admin", "admin-v@example.com", "human", is_compliance_admin=True)
+    resp = client.get("/api/audit-log/verify?max_rows=abc",
+                      headers={"X-API-Key": admin.issued_api_key})
+    assert resp.status_code == 400
 
 
-def _insert_hashed_entry(prev_hash, table_name="controls", record_id="abc",
-                          action="INSERT", changed_at=None):
-    """Insert an audit entry with a valid hash chain link."""
-    import hashlib
-    row_data = prev_hash + table_name + record_id + action + '{"name": "test"}'
-    row_hash = hashlib.sha256(row_data.encode("utf-8")).hexdigest()
-    entry = AuditLog(
-        table_name=table_name,
-        record_id=record_id,
-        action=action,
-        new_values={"name": "test"},
-        changed_at=changed_at or datetime.now(timezone.utc),
-        previous_hash=prev_hash,
-        row_hash=row_hash,
-    )
-    db.session.add(entry)
-    db.session.commit()
-    return entry
+def test_verify_is_admin_only(client, member):
+    resp = client.get("/api/audit-log/verify", headers={"X-API-Key": member.issued_api_key})
+    assert resp.status_code == 403
 
 
-def test_verify_valid_chain(client, member, app_ctx):
-    """A properly linked hash chain should verify as valid."""
-    genesis = "0" * 64
-    e1 = _insert_hashed_entry(genesis, record_id="r1")
-    e2 = _insert_hashed_entry(e1.row_hash, record_id="r2")
-    e3 = _insert_hashed_entry(e2.row_hash, record_id="r3")
-
-    resp = client.get("/api/audit-log/verify",
-                      headers={"X-API-Key": member.api_key})
-    assert resp.status_code == 200
-    data = resp.get_json()
-    assert data["status"] == "valid"
-    assert data["verified"] == 3
-    assert data["chain_head"] == e3.row_hash
+def test_audit_log_api_redacts_legacy_secrets(client, member, app_ctx):
+    _insert_audit_entry(table_name="team_members", action="UPDATE",
+                        old_values={"api_key": "plaintext-key", "name": "A"},
+                        new_values={"api_key_hash": "sha256:abc", "name": "A"})
+    resp = client.get("/api/audit-log?table=team_members",
+                      headers={"X-API-Key": member.issued_api_key})
+    entry = resp.get_json()[0]
+    assert entry["old_values"]["api_key"] == "[redacted]"
+    assert entry["new_values"]["api_key_hash"] == "sha256:abc"
+    assert "plaintext-key" not in resp.get_data(as_text=True)
 
 
-def test_verify_broken_chain(client, member, app_ctx):
-    """A tampered previous_hash should be detected."""
-    genesis = "0" * 64
-    e1 = _insert_hashed_entry(genesis, record_id="r1")
-    # Tamper: use wrong previous_hash
-    _insert_hashed_entry("deadbeef" * 8, record_id="r2")
+def test_audit_log_api_hidden_from_clients(client, app_ctx):
+    reviewer = team_service.create_member("Reviewer", "r@example.com", "client")
+    resp = client.get("/api/audit-log", headers={"X-API-Key": reviewer.issued_api_key})
+    assert resp.status_code == 403
 
-    resp = client.get("/api/audit-log/verify",
-                      headers={"X-API-Key": member.api_key})
-    assert resp.status_code == 200
-    data = resp.get_json()
-    assert data["status"] == "broken"
-    assert data["verified"] == 1
-    assert data["first_break"] is not None
-    assert data["first_break"]["issue"] == "Chain break: previous_hash does not match preceding entry's row_hash"
+
+def test_audit_log_api_before_id_paging(client, member, app_ctx):
+    for i in range(3):
+        _insert_audit_entry(record_id=f"r{i}")
+    first = client.get("/api/audit-log?limit=2", headers={"X-API-Key": member.issued_api_key}).get_json()
+    assert len(first) == 2
+    rest = client.get(f"/api/audit-log?limit=2&before_id={first[-1]['id']}",
+                      headers={"X-API-Key": member.issued_api_key}).get_json()
+    assert [e["record_id"] for e in rest] == ["r0"]
+    bad = client.get("/api/audit-log?before_id=x", headers={"X-API-Key": member.issued_api_key})
+    assert bad.status_code == 400
 
 
 def test_verify_requires_auth(client):

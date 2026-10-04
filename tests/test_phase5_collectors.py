@@ -29,6 +29,18 @@ from collectors.platform_collector import PlatformCollector
 from collectors.policy_check_collector import PolicyCollector
 from collectors.registry import COLLECTOR_CLASSES, get_collector_class
 from collectors.vendor_check_collector import VendorCollector
+from tests.conftest import login
+
+
+@pytest.fixture(autouse=True)
+def public_dns(monkeypatch):
+    """Every host name resolves to a public address; no test makes a DNS lookup."""
+    import socket
+
+    def getaddrinfo(host, port, *args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.215.14", port or 443))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
 
 
 @pytest.fixture
@@ -319,7 +331,7 @@ def test_platform_collector_probes_services(app_ctx):
         config={
             "services": [
                 {
-                    "name": "maxgoodai",
+                    "name": "public-api",
                     "url": "https://api.example.com",
                     "health_path": "/api/health",
                     "auth": "none",
@@ -336,7 +348,7 @@ def test_platform_collector_probes_services(app_ctx):
             def total_seconds():
                 return 0.125
 
-    with patch("requests.get") as mock_get:
+    with patch("requests.Session.get") as mock_get:
         mock_get.return_value = FakeResponse()
         results = PlatformCollector(config=config).run()
 
@@ -344,7 +356,7 @@ def test_platform_collector_probes_services(app_ctx):
     call_kwargs = mock_get.call_args
     assert call_kwargs.args[0] == "https://api.example.com/api/health"
     assert any(
-        r.check_name == "platform_health:maxgoodai" and r.status == "pass"
+        r.check_name == "platform_health:public-api" and r.status == "pass"
         for r in results
     )
 
@@ -358,7 +370,7 @@ def test_platform_collector_handles_http_error(app_ctx):
             ],
         },
     )
-    with patch("requests.get", side_effect=Exception("connection refused")):
+    with patch("requests.Session.get", side_effect=Exception("connection refused")):
         results = PlatformCollector(config=config).run()
     health = [r for r in results if r.check_name.startswith("platform_health:")]
     assert len(health) == 1
@@ -383,7 +395,7 @@ def test_platform_collector_handles_non_2xx(app_ctx):
             def total_seconds():
                 return 0.01
 
-    with patch("requests.get", return_value=FakeResponse()):
+    with patch("requests.Session.get", return_value=FakeResponse()):
         results = PlatformCollector(config=config).run()
     health = [r for r in results if r.check_name.startswith("platform_health:")]
     assert health[0].status == "fail"
@@ -648,8 +660,7 @@ def test_executor_runs_git_collector(app_ctx):
 
 
 def _login_admin(client, admin):
-    with client.session_transaction() as sess:
-        sess["api_key"] = admin.api_key
+    login(client, admin)
 
 
 def test_admin_form_submit_policy_config(client, admin):

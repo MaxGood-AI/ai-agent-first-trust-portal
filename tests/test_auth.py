@@ -98,7 +98,7 @@ def test_decision_log_upload_requires_auth(client):
 
 def test_valid_api_key_header(client, member):
     resp = client.get("/api/compliance-score",
-                      headers={"X-API-Key": member.api_key})
+                      headers={"X-API-Key": member.issued_api_key})
     assert resp.status_code == 200
 
 
@@ -106,7 +106,7 @@ def test_valid_api_key_header(client, member):
 
 def test_valid_bearer_token(client, member):
     resp = client.get("/api/compliance-score",
-                      headers={"Authorization": f"Bearer {member.api_key}"})
+                      headers={"Authorization": f"Bearer {member.issued_api_key}"})
     assert resp.status_code == 200
 
 
@@ -124,7 +124,7 @@ def test_invalid_api_key(client):
 def test_inactive_member_rejected(client, member):
     team_service.deactivate_member(member.id)
     resp = client.get("/api/compliance-score",
-                      headers={"X-API-Key": member.api_key})
+                      headers={"X-API-Key": member.issued_api_key})
     assert resp.status_code == 401
 
 
@@ -132,24 +132,24 @@ def test_inactive_member_rejected(client, member):
 
 def test_admin_dashboard_requires_admin(client, member):
     resp = client.get("/admin/",
-                      headers={"X-API-Key": member.api_key})
+                      headers={"X-API-Key": member.issued_api_key})
     assert resp.status_code == 403
     assert resp.get_json()["error"] == "Admin access required"
 
 
 def test_admin_dashboard_accessible_by_admin(client, admin_member):
     resp = client.get("/admin/",
-                      headers={"X-API-Key": admin_member.api_key})
+                      headers={"X-API-Key": admin_member.issued_api_key})
     assert resp.status_code == 200
 
 
 def test_admin_team_requires_admin(client, member):
     resp = client.get("/admin/team",
-                      headers={"X-API-Key": member.api_key})
+                      headers={"X-API-Key": member.issued_api_key})
     assert resp.status_code == 403
 
 
 def test_admin_team_accessible_by_admin(client, admin_member):
     resp = client.get("/admin/team",
-                      headers={"X-API-Key": admin_member.api_key})
+                      headers={"X-API-Key": admin_member.issued_api_key})
     assert resp.status_code == 200

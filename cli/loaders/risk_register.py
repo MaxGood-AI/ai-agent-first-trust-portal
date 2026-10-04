@@ -5,6 +5,7 @@ from cli.loaders.base import BaseLoader
 
 
 class RiskRegisterLoader(BaseLoader):
+    dataset = "risk-register"
     model_class = RiskRegister
     file_name = "risk-register.json"
     field_map = {}
@@ -12,9 +13,4 @@ class RiskRegisterLoader(BaseLoader):
 
     def _build_record(self, item):
         """Extract owner.id/owner.name from nested object before standard build."""
-        item = dict(item)
-        owner = item.get("owner")
-        if isinstance(owner, dict):
-            item["owner_id"] = owner.get("id")
-            item["owner_name"] = owner.get("name")
-        return super()._build_record(item)
+        return super()._build_record(self._with_owner(item))

@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Git Sources{% endblock %}
+
+{% block content %}
+<h1>Git Sources</h1>
+<p><a href="{{ url_for('admin.dashboard') }}">&larr; Back to Dashboard</a></p>
+<p>The portal pulls its governance repository (policies, agent instructions, infrastructure documents) and its evidence repository through these sources. Syncs read only the files that changed and write only real differences.</p>
+
+{% include "admin/_flash.html" %}
+
+{% if sources %}
+<table class="data-table">
+    <thead>
+        <tr><th>Name</th><th>Role</th><th>Provider</th><th>Repository</th><th>Schedule</th><th>Last synced commit</th><th>Last status</th><th></th></tr>
+    </thead>
+    <tbody>
+        {% for s in sources %}
+        <tr class="{{ 'inactive' if not s.enabled }}">
+            <td><a href="{{ url_for('admin_git.git_source_detail', source_ref=s.id) }}">{{ s.name }}</a></td>
+            <td>{{ s.role }}</td>
+            <td>{{ s.provider }}</td>
+            <td><code>{{ s.repository }}</code> @ {{ s.branch }}</td>
+            <td>{{ s.schedule_cron or 'manual' }}{% if s.next_run_at %}<br><span class="help-text">next {{ s.next_run_at[:16] | replace('T', ' ') }}</span>{% endif %}</td>
+            <td><code>{{ (s.last_synced_commit or '')[:12] }}</code></td>
+            <td>{{ s.last_sync_status or '—' }}</td>
+            <td>
+                <form method="POST" action="{{ url_for('admin_git.git_source_sync', source_ref=s.id) }}" class="inline-form">
+                    {{ csrf_field() }}
+                    <button type="submit">Sync now</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>No git sources yet.</p>
+{% endif %}
+
+<h2>Add a git source</h2>
+<form method="POST" action="{{ url_for('admin_git.git_source_create') }}" class="team-form">
+    {{ csrf_field() }}
+    <div class="form-row"><label for="name">Name</label><input id="name" name="name" required placeholder="governance"></div>
+    <div class="form-row"><label for="role">Role</label>
+        <select id="role" name="role"><option value="governance">governance</option><option value="evidence">evidence</option></select></div>
+    <div class="form-row"><label for="provider">Provider</label>
+        <select id="provider" name="provider"><option value="codecommit">AWS CodeCommit</option><option value="github">GitHub</option><option value="local">Local directory</option></select></div>
+    <div class="form-row"><label for="repository">Repository</label><input id="repository" name="repository" required placeholder="CodeCommit repository name, GitHub owner/name, or a local directory"></div>
+    <div class="form-row"><label for="branch">Branch</label><input id="branch" name="branch" value="main"></div>
+    <div class="form-row"><label for="region">AWS region (CodeCommit)</label><input id="region" name="region" placeholder="defaults to AWS_REGION"></div>
+    <div class="form-row"><label for="credential_mode">Credentials</label>
+        <select id="credential_mode" name="credential_mode">
+            <option value="">Default for the provider</option>
+            <option value="runtime_role">CodeCommit: the portal's runtime role</option>
+            <option value="assume_role">CodeCommit: assume a role</option>
+            <option value="portal_secret">GitHub: GITHUB_TOKEN from the portal secret</option>
+            <option value="stored_token">GitHub: token stored encrypted</option>
+            <option value="none">None (public GitHub repository or local directory)</option>
+        </select></div>
+    <div class="form-row"><label for="role_arn">Role ARN (assume role)</label><input id="role_arn" name="role_arn"></div>
+    <div class="form-row"><label for="external_id">External ID (assume role)</label><input id="external_id" name="external_id"></div>
+    <div class="form-row"><label for="token">Token (stored token)</label><input id="token" name="token" type="password" autocomplete="off"></div>
+    <div class="form-row"><label for="schedule_cron">Schedule (crontab, UTC)</label><input id="schedule_cron" name="schedule_cron" placeholder="*/30 * * * *"></div>
+    <div class="form-row"><label><input type="checkbox" name="enabled" checked> Enabled</label></div>
+    <div class="form-row"><label><input type="checkbox" name="record_commits" checked> Record commits that touch mapped paths as change records</label></div>
+    <button type="submit">Add source</button>
+</form>
+{% endblock %}

@@ -1,0 +1,30 @@
+# Isolated unit-test stack: PostgreSQL 17 on tmpfs plus the "test" image stage.
+# No container names and no host ports, so it never collides with a running
+# portal. Always use a unique project name:
+#
+#   docker compose -p tp-test-$$ -f docker-compose.test.yml run --rm tests
+#   docker compose -p tp-test-$$ -f docker-compose.test.yml down -v
+services:
+  db:
+    image: public.ecr.aws/docker/library/postgres:17
+    environment:
+      POSTGRES_DB: trust_portal_test
+      POSTGRES_USER: trust_portal
+      POSTGRES_PASSWORD: trust_portal
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trust_portal -d trust_portal_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  tests:
+    build:
+      context: .
+      target: test
+    environment:
+      TEST_DATABASE_URL: postgresql://trust_portal:trust_portal@db:5432/trust_portal_test
+    depends_on:
+      db:
+        condition: service_healthy

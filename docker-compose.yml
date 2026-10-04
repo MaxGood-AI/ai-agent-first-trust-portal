@@ -1,3 +1,6 @@
+# Single-host production stack: the production image plus PostgreSQL 17.
+# Put a TLS-terminating reverse proxy in front of port 5100 (session cookies are
+# Secure in production). Required in .env: SECRET_KEY, POSTGRES_PASSWORD.
 services:
   trust-portal:
     build: .
@@ -7,21 +10,20 @@ services:
     env_file:
       - .env
     environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-trust_portal}:${POSTGRES_PASSWORD:-trust_portal}@db:5432/${POSTGRES_DB:-trust_portal}
-    volumes:
-      - compliance-data:/data
+      - PORTAL_ENV=production
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-trust_portal}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-trust_portal}
     depends_on:
       db:
         condition: service_healthy
     restart: unless-stopped
 
   db:
-    image: postgres:17
+    image: public.ecr.aws/docker/library/postgres:17
     container_name: trust-portal-db
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-trust_portal}
       POSTGRES_USER: ${POSTGRES_USER:-trust_portal}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trust_portal}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -33,4 +35,3 @@ services:
 
 volumes:
   pgdata:
-  compliance-data:

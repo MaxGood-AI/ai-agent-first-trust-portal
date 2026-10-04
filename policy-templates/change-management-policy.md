@@ -33,7 +33,7 @@ This policy applies to [all changes to production systems / all code changes reg
 ## 2. Change Request Process
 
 <!-- CUSTOMIZE:
-- How do changes actually get requested and tracked? Do you use Jira, Linear, GitHub Issues, KanbanZone, Trello, sticky notes, or Slack messages?
+- How do changes actually get requested and tracked? Do you use an issue tracker, a task board, sticky notes, or chat messages?
 - Who can request a change? Anyone on the team, or only certain roles?
 - What information is required in a change request? Just a title, or a full description with acceptance criteria?
 - Is there a formal approval step before work begins, or do developers just pick up work and start?
@@ -42,7 +42,7 @@ This policy applies to [all changes to production systems / all code changes reg
 
 ### Tracking System
 
-Changes are tracked in [tool name — e.g., KanbanZone, Jira, GitHub Issues]. [Describe how work items flow — e.g., "Cards move from Backlog to In Progress to Review to Done."]
+Changes are tracked in [tool name — e.g., your issue tracker or task board]. [Describe how work items flow — e.g., "Cards move from Backlog to In Progress to Review to Done."]
 
 ### Change Request Requirements
 

@@ -1,0 +1,24 @@
+# Keep secrets, VCS metadata and local state out of the build context.
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+*.env.local
+**/__pycache__
+**/*.py[cod]
+.pytest_cache
+.coverage
+htmlcov
+.venv
+venv
+.idea
+.vscode
+.DS_Store
+decision-logs
+evidence-artifacts
+logs
+*.log
+docker-compose*.yml
+migration/trustcloud_export.json
+migration/trustcloud_evidence_export.json

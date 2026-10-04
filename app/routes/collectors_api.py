@@ -19,7 +19,12 @@ from app.services.collector_encryption import (
     CollectorEncryptionError,
     encrypt_credentials,
 )
-from app.services.collector_executor import execute_run
+from app.services.scheduler import (
+    ActiveRunConflict,
+    enqueue_collector_run,
+    next_run_time,
+    parse_cron,
+)
 from app.services.credential_resolver import (
     CredentialResolutionError,
     CredentialResolver,
@@ -34,6 +39,13 @@ collectors_api_bp = Blueprint("collectors_api", __name__)
 KNOWN_COLLECTOR_NAMES = {"aws", "git", "platform", "policy", "vendor"}
 
 
+def _next_run_iso(config: CollectorConfig) -> str | None:
+    if not config.enabled:
+        return None
+    upcoming = next_run_time(config.schedule_cron)
+    return upcoming.isoformat() if upcoming else None
+
+
 def _serialize_config(config: CollectorConfig) -> dict:
     """Serialize a CollectorConfig for API responses. Never includes credentials."""
     return {
@@ -45,7 +57,7 @@ def _serialize_config(config: CollectorConfig) -> dict:
         "config": config.config or {},
         "schedule_cron": config.schedule_cron,
         "last_run_at": config.last_run_at.isoformat() if config.last_run_at else None,
-        "next_run_at": config.next_run_at.isoformat() if config.next_run_at else None,
+        "next_run_at": _next_run_iso(config),
         "last_run_status": config.last_run_status,
         "permission_check_at": (
             config.permission_check_at.isoformat() if config.permission_check_at else None
@@ -95,9 +107,10 @@ def detect_environment():
     }
 
     try:
-        import boto3
+        from app.services.aws_session import get_session, runtime_role_arn
 
-        session = boto3.Session()
+        session = get_session()
+        env_info["runtime_role_arn"] = runtime_role_arn()
         sts = session.client("sts")
         caller = sts.get_caller_identity()
         env_info["identity"] = caller.get("Arn")
@@ -184,7 +197,11 @@ def configure_collector(name):
     if "config" in data:
         config.config = data["config"]
     if "schedule_cron" in data:
-        config.schedule_cron = data["schedule_cron"]
+        cron = (data["schedule_cron"] or "").strip() or None
+        if cron and parse_cron(cron) is None:
+            db.session.rollback()
+            return jsonify({"error": f"Invalid cron expression: {cron}"}), 400
+        config.schedule_cron = cron
     if "enabled" in data:
         config.enabled = bool(data["enabled"])
 
@@ -410,17 +427,21 @@ def get_run(run_id):
 @require_api_key
 @require_admin
 def run_collector(name):
-    """Trigger an immediate collector run and execute it synchronously.
+    """Queue an immediate collector run ("Run now").
 
-    Creates a CollectorRun row, resolves credentials, runs the registered
-    collector class, writes per-check results and evidence to the database,
-    and returns the final run state.
+    The run executes asynchronously on the scheduler leader; poll
+    ``GET /api/collectors/runs/<run_id>`` until ``status`` is no longer
+    ``queued`` or ``running``. When a run of this collector is already queued
+    or running, that run is returned with status 409; when that run cannot be
+    read back, the 409 body is ``{"error": ...}``.
     ---
     responses:
-      200:
-        description: Run completed (success, partial, or failure)
+      202:
+        description: Run queued; body is the run (status "queued")
       404:
         description: Collector not configured or not registered
+      409:
+        description: A run of this collector is already queued or running (body is that run, or an error)
     """
     config = CollectorConfig.query.filter_by(name=name).first()
     if not config:
@@ -431,16 +452,10 @@ def run_collector(name):
         return jsonify({"error": f"No collector class registered for {name}"}), 404
 
     member = getattr(g, "current_team_member", None)
-    run = CollectorRun(
-        id=str(uuid.uuid4()),
-        collector_config_id=config.id,
-        triggered_by_team_member_id=member.id if member else None,
-        trigger_type="manual",
-        status="running",
-    )
-    db.session.add(run)
-    db.session.commit()
-
-    execute_run(run)
-
-    return jsonify(_serialize_run(run)), 200
+    try:
+        run, created = enqueue_collector_run(config, "manual", member.id if member else None)
+    except ActiveRunConflict:
+        return jsonify({"error": f"A run of collector {name} is already queued or running"}), 409
+    body = _serialize_run(run)
+    body["poll_url"] = f"/api/collectors/runs/{run.id}"
+    return jsonify(body), (202 if created else 409)

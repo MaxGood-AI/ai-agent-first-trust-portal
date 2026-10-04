@@ -15,8 +15,17 @@
 {% endif %}
 {% endwith %}
 
+{% if issued_key %}
+<div class="flash success issued-key">
+    <p>{{ issued_message }}</p>
+    <p>API key for <strong>{{ issued_member.name }}</strong> &mdash; copy it now; it is shown only once and is stored only as a hash:</p>
+    <p><code class="issued-key-value">{{ issued_key }}</code></p>
+</div>
+{% endif %}
+
 <h2>Add Team Member</h2>
 <form method="POST" action="{{ url_for('admin.create_team_member') }}" class="team-form">
+    {{ csrf_field() }}
     <div class="form-row">
         <label for="name">Name</label>
         <input type="text" id="name" name="name" required placeholder="e.g. Jane Smith or Claude Opus">
@@ -72,7 +81,13 @@
             <td>{{ member.role }}</td>
             <td>{{ member.company or '' }}</td>
             <td>{{ "Yes" if member.is_compliance_admin else "No" }}</td>
-            <td><code>{{ member.api_key[:8] }}...{{ member.api_key[-4:] }}</code></td>
+            <td>
+                {% if not member.has_usable_key or member.key_rotation_required %}
+                    <strong class="key-missing">No key &mdash; regenerate</strong>
+                {% else %}
+                    <code title="Fingerprint of the key's SHA-256 digest">{{ member.key_fingerprint[:8] }}</code>
+                {% endif %}
+            </td>
             <td>{{ member.expires_at.strftime('%Y-%m-%d') if member.expires_at else 'Never' }}</td>
             <td>
                 {% if not member.is_active %}
@@ -86,9 +101,11 @@
             <td>
                 {% if member.is_active %}
                 <form method="POST" action="{{ url_for('admin.regenerate_team_member_key', member_id=member.id) }}" style="display:inline">
+                    {{ csrf_field() }}
                     <button type="submit" class="btn-small">Regenerate Key</button>
                 </form>
                 <form method="POST" action="{{ url_for('admin.deactivate_team_member', member_id=member.id) }}" style="display:inline">
+                    {{ csrf_field() }}
                     <button type="submit" class="btn-small btn-danger">Deactivate</button>
                 </form>
                 {% else %}

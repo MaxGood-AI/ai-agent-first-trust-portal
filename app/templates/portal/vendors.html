@@ -21,7 +21,7 @@
     <tbody>
         {% for vendor in vendors %}
         <tr>
-            <td>{% if vendor.website_url %}<a href="{{ vendor.website_url }}">{{ vendor.name }}</a>{% else %}{{ vendor.name }}{% endif %}</td>
+            <td>{% if vendor.website_url %}<a href="{{ vendor.website_url|safe_url }}" rel="noopener noreferrer">{{ vendor.name }}</a>{% else %}{{ vendor.name }}{% endif %}</td>
             <td>{{ vendor.status|title }}</td>
             <td>{{ 'Yes' if vendor.is_subprocessor else 'No' }}</td>
             <td>{{ (vendor.classification or [])|join(', ')|replace('_', ' ')|title }}</td>

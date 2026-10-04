@@ -8,6 +8,7 @@
 {% for category, control_data in categories.items() %}
 <section class="status-category">
     <h2>{{ category|replace('_', ' ')|title }}</h2>
+    {% if show_controls %}
     {% for item in control_data %}
     <div class="control-status">
         <h3>{% if item.control.control_id_short %}{{ item.control.control_id_short }}: {% endif %}{{ item.control.name }}</h3>
@@ -19,6 +20,18 @@
         {% endif %}
     </div>
     {% endfor %}
+    {% else %}
+    {% set passed = control_data|sum(attribute='passed') %}
+    {% set total = control_data|sum(attribute='total') %}
+    <div class="control-status">
+        <span class="progress">{{ control_data|length }} controls &middot; {{ passed }}/{{ total }} tests passing</span>
+        {% if total > 0 %}
+        <div class="progress-bar">
+            <div class="progress-fill" style="width: {{ (passed / total * 100)|int }}%"></div>
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
 </section>
 {% endfor %}
 {% endblock %}

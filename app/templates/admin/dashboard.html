@@ -4,8 +4,27 @@
 {% block content %}
 <div style="display: flex; justify-content: space-between; align-items: center;">
     <h1>Compliance Admin Dashboard</h1>
-    <a href="{{ url_for('admin.logout') }}">Logout</a>
+    <form method="POST" action="{{ url_for('admin.logout') }}" class="inline-form">
+        {{ csrf_field() }}
+        <button type="submit" class="link-button">Logout</button>
+    </form>
 </div>
+{% set witness = witness_status() %}
+<p id="witness-state">Audit witness: <strong>{{ witness.state }}</strong>{% if witness.stale %} (stale){% endif %}
+    {%- if witness.last_published_at %}; last chain head published {{ witness.last_published_at }}{% endif %}.</p>
+{% if witness.stale %}
+<p class="status-warn" role="alert" id="witness-stale">
+    Audit witness is stale: no chain head has been published since
+    {{ witness.last_published_at or "the witness was armed" }} although the audit log has changed
+    (latest published row {{ witness.last_published_id or "none" }}, current row {{ witness.head_id }}).
+    Check the scheduler and the witness bucket permissions.
+</p>
+{% elif witness.state == "unarmed" %}
+<p class="help-text warning-text" id="witness-unarmed">
+    Audit witness is not armed: chain heads are not published. Arm it with
+    <code>python -m cli audit-witness-arm</code> once this database is the production system of record.
+</p>
+{% endif %}
 
 {% if collector_overview and collector_overview.needs_setup %}
 <div class="setup-banner" id="collector-setup-banner">
@@ -106,6 +125,9 @@
 <ul>
     <li><a href="{{ url_for('admin.evidence_management') }}">Manage Evidence Gaps</a></li>
     <li><a href="{{ url_for('admin.collectors_list') }}">Evidence Collectors</a></li>
+    <li><a href="{{ url_for('admin_git.git_sources') }}">Git Sources (governance and evidence repositories)</a></li>
+    <li><a href="{{ url_for('admin_git.governance') }}">Governance Documents</a></li>
+    <li><a href="{{ url_for('admin_git.governance_changes') }}">Change History</a></li>
     <li><a href="{{ url_for('admin.team_management') }}">Manage Team Members</a></li>
     <li><a href="{{ url_for('admin.admin_audit_log') }}">Audit Log</a></li>
     <li><a href="{{ url_for('admin.admin_settings') }}">Portal Settings</a></li>

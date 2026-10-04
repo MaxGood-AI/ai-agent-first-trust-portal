@@ -7,6 +7,7 @@
 
 <h2>Submit Evidence</h2>
 <form method="POST" action="{{ url_for('admin.evidence_upload') }}" enctype="multipart/form-data">
+    {{ csrf_field() }}
     <div style="display: flex; flex-direction: column; gap: 0.5rem; max-width: 600px;">
         <label>Test Record:
             <select name="test_record_id" required>
@@ -79,7 +80,7 @@
                 {% if ev.file_data %}
                     <a href="{{ url_for('admin.evidence_download', evidence_id=ev.id) }}">{{ ev.file_name or 'Download' }}</a>
                 {% elif ev.url %}
-                    <a href="{{ ev.url }}" target="_blank" rel="noopener">Link</a>
+                    <a href="{{ ev.url|safe_url }}" target="_blank" rel="noopener noreferrer">Link</a>
                 {% else %}
                     —
                 {% endif %}

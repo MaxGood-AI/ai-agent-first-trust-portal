@@ -1,22 +1,17 @@
-"""Base interface for v2 evidence collectors.
+"""Base interface for evidence collectors.
 
-v2 collectors differ from the legacy ``base_collector.BaseCollector``:
-
-- They accept a ``CollectorConfig`` and a ``CredentialResolver``, so credentials
-  flow from the portal DB (encrypted) rather than environment variables.
+- Collectors accept a ``CollectorConfig`` and a ``CredentialResolver``: their
+  configuration lives in the portal database (admin UI or API) and stored
+  credentials are Fernet-encrypted.
 - They declare ``required_permissions`` so the ``PermissionProber`` can tell an
   admin up front whether the role/credentials will work.
 - ``run()`` produces structured ``CheckResult`` objects that the executor maps
   to ``CollectorRun`` / ``CollectorCheckResult`` / ``Evidence`` database rows.
-
-The legacy ``collectors/base_collector.py`` and ``collectors/aws_collector.py``
-remain in place for now — they are being replaced by this interface and the
-``collectors/aws/`` package, but the cutover happens incrementally so existing
-tests continue to pass.
 """
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any
 
 from app.models.collector_config import CollectorConfig
@@ -77,3 +72,23 @@ class BaseCollector(ABC):
         ``CheckResult(status="error", message=...)`` so a single failing probe
         does not abort the entire run.
         """
+
+
+def read_snapshot(query) -> list[SimpleNamespace]:
+    """Run a read-only ORM query, copy each row's columns into a plain object,
+    and end the read transaction.
+
+    Collectors use it before slow work (HTTP probes, cloud API calls), so no
+    database transaction - and no table lock - stays open while they run.
+    """
+    from sqlalchemy import inspect as sa_inspect
+
+    from app.models import db
+
+    rows = query.all()
+    snapshot = [
+        SimpleNamespace(**{attr.key: getattr(row, attr.key) for attr in sa_inspect(type(row)).column_attrs})
+        for row in rows
+    ]
+    db.session.rollback()
+    return snapshot

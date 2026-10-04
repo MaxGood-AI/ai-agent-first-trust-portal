@@ -35,7 +35,7 @@ def member(app_ctx):
 
 
 def _auth(member):
-    return {"X-API-Key": member.api_key}
+    return {"X-API-Key": member.issued_api_key}
 
 
 # --- Public portal routes (no auth) ---
@@ -75,6 +75,26 @@ def test_portal_policy_detail(app_ctx, client):
     assert b"Test Policy" in resp.data
 
 
+def test_portal_draft_policy_is_not_public(app_ctx, client):
+    with app_ctx.app_context():
+        db.session.add(Policy(id="pol-draft", title="Draft Policy", category="security", status="draft"))
+        db.session.commit()
+    assert client.get("/policies/pol-draft").status_code == 404
+
+
+def test_portal_policy_never_reads_server_files(app_ctx, client, tmp_path):
+    secret = tmp_path / "secret.md"
+    secret.write_text("# TOP SECRET SERVER FILE")
+    with app_ctx.app_context():
+        db.session.add(Policy(id="pol-file", title="File Policy", category="security",
+                              status="approved", file_path=str(secret)))
+        db.session.commit()
+    resp = client.get("/policies/pol-file")
+    assert resp.status_code == 200
+    assert b"TOP SECRET" not in resp.data
+    assert b"not available" in resp.data
+
+
 def test_portal_policy_detail_404(client):
     resp = client.get("/policies/nonexistent")
     assert resp.status_code == 404
@@ -92,7 +112,10 @@ def test_portal_vendors(client):
     assert b"Vendor Inventory" in resp.data
 
 
-def test_portal_risks(client):
+def test_portal_risks_is_private_until_published(client, admin_member):
+    assert client.get("/risks").status_code == 404
+    client.put("/api/settings", headers=_auth(admin_member),
+               json={"public_sections": ["overview", "risks"]})
     resp = client.get("/risks")
     assert resp.status_code == 200
     assert b"Risk Register" in resp.data
@@ -154,7 +177,7 @@ def test_api_controls_empty(client, member):
 def test_api_decision_log_sessions_empty(client, member):
     resp = client.get("/api/decision-log/sessions", headers=_auth(member))
     assert resp.status_code == 200
-    assert resp.get_json() == []
+    assert resp.get_json() == {"items": [], "page": 1, "per_page": 100, "total": 0, "pages": 0}
 
 
 def test_portal_index_shows_privacy_category(app_ctx, client):
@@ -195,7 +218,7 @@ def test_status_page_shows_control_id(app_ctx, client):
 def test_evidence_page_has_back_to_dashboard(client, admin_member):
     """Evidence management page must have a back-to-dashboard link."""
     resp = client.get("/admin/evidence",
-                      headers={"X-API-Key": admin_member.api_key})
+                      headers={"X-API-Key": admin_member.issued_api_key})
     assert resp.status_code == 200
     assert b"Back to Dashboard" in resp.data
 
@@ -203,7 +226,7 @@ def test_evidence_page_has_back_to_dashboard(client, admin_member):
 def test_team_page_has_back_to_dashboard(client, admin_member):
     """Team members page must have a back-to-dashboard link."""
     resp = client.get("/admin/team",
-                      headers={"X-API-Key": admin_member.api_key})
+                      headers={"X-API-Key": admin_member.issued_api_key})
     assert resp.status_code == 200
     assert b"Back to Dashboard" in resp.data
 
@@ -211,7 +234,7 @@ def test_team_page_has_back_to_dashboard(client, admin_member):
 def test_audit_log_page_has_back_to_dashboard(client, admin_member):
     """Audit log page must have a back-to-dashboard link."""
     resp = client.get("/admin/audit-log",
-                      headers={"X-API-Key": admin_member.api_key})
+                      headers={"X-API-Key": admin_member.issued_api_key})
     assert resp.status_code == 200
     assert b"Back to Dashboard" in resp.data
 
@@ -219,7 +242,7 @@ def test_audit_log_page_has_back_to_dashboard(client, admin_member):
 def test_settings_page_has_back_to_dashboard(client, admin_member):
     """Settings page must have a back-to-dashboard link."""
     resp = client.get("/admin/settings",
-                      headers={"X-API-Key": admin_member.api_key})
+                      headers={"X-API-Key": admin_member.issued_api_key})
     assert resp.status_code == 200
     assert b"Back to Dashboard" in resp.data
 
@@ -227,7 +250,7 @@ def test_settings_page_has_back_to_dashboard(client, admin_member):
 def test_dashboard_has_all_quick_action_links(client, admin_member):
     """Dashboard must link to evidence, team, audit log, and settings."""
     resp = client.get("/admin/",
-                      headers={"X-API-Key": admin_member.api_key})
+                      headers={"X-API-Key": admin_member.issued_api_key})
     assert resp.status_code == 200
     assert b"evidence" in resp.data.lower()
     assert b"team" in resp.data.lower()
@@ -238,7 +261,7 @@ def test_dashboard_has_all_quick_action_links(client, admin_member):
 def test_team_page_has_client_role_option(client, admin_member):
     """Team member creation form must include 'client' role option."""
     resp = client.get("/admin/team",
-                      headers={"X-API-Key": admin_member.api_key})
+                      headers={"X-API-Key": admin_member.issued_api_key})
     assert resp.status_code == 200
     assert b'value="client"' in resp.data
 

@@ -4,11 +4,11 @@
 # Install: configure in ~/.claude/settings.json under hooks.SessionEnd
 #
 # Required env vars (set in shell or sourced from .env):
-#   TRUST_PORTAL_API_URL — trust portal base URL (e.g., https://trust.maxgood.work)
+#   TRUST_PORTAL_API_URL — trust portal base URL (e.g., https://trust.example.com)
 #   TRUST_PORTAL_API_KEY — API key for the submitting team member
 #
 # Claude Code passes session data via stdin as JSON with fields:
-#   session_id, cwd, transcript_path, exit_reason
+#   session_id, cwd, transcript_path, reason
 #
 # Behavior:
 #   1. Check if cwd starts with the configured dev directory (default ~/Development)
@@ -29,7 +29,7 @@ INPUT=$(cat)
 SESSION_ID=$(echo "$INPUT" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d.get('session_id', ''))" 2>/dev/null || echo "")
 CWD=$(echo "$INPUT" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d.get('cwd', ''))" 2>/dev/null || echo "")
 TRANSCRIPT_PATH=$(echo "$INPUT" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d.get('transcript_path', ''))" 2>/dev/null || echo "")
-EXIT_REASON=$(echo "$INPUT" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d.get('exit_reason', ''))" 2>/dev/null || echo "")
+EXIT_REASON=$(echo "$INPUT" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d.get('reason') or d.get('exit_reason') or '')" 2>/dev/null || echo "")
 
 # Scope check: only process sessions under the dev directory
 if [[ -z "$CWD" || "$CWD" != "${DEV_DIR}"* ]]; then
@@ -76,8 +76,11 @@ HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
     --max-time 30 \
     "${UPLOAD_URL}" 2>/dev/null || echo "000")
 
-if [[ "$HTTP_STATUS" == "200" ]]; then
-    # Success — keep a local copy for backup
+# 200: stored (created, replaced, unchanged or kept). 409: the portal rejected this
+# export because it does not extend the stored transcript; it keeps the upload for
+# review, so retrying cannot help. Both are final; anything else is retried later.
+if [[ "$HTTP_STATUS" == "200" || "$HTTP_STATUS" == "409" ]]; then
+    # Final answer — keep a local copy for backup
     mkdir -p "$STAGING_DIR"
     TIMESTAMP=$(date -u +"%Y-%m-%dT%H%M%SZ")
     DEST="${STAGING_DIR}/${TIMESTAMP}_${SESSION_ID}"
@@ -85,10 +88,10 @@ if [[ "$HTTP_STATUS" == "200" ]]; then
     python3 -c "
 import json, sys
 meta = {'session_id': sys.argv[1], 'cwd': sys.argv[2], 'reason': sys.argv[3],
-        'exported_at': sys.argv[4], 'uploaded': True}
+        'exported_at': sys.argv[4], 'uploaded': True, 'http_status': sys.argv[6]}
 with open(sys.argv[5], 'w') as f:
     json.dump(meta, f, indent=2)
-" "$SESSION_ID" "$CWD" "$EXIT_REASON" "$TIMESTAMP" "${DEST}.meta.json" 2>/dev/null || true
+" "$SESSION_ID" "$CWD" "$EXIT_REASON" "$TIMESTAMP" "${DEST}.meta.json" "$HTTP_STATUS" 2>/dev/null || true
 else
     # Failure — stage for retry
     mkdir -p "$RETRY_DIR"

@@ -21,6 +21,8 @@ class PortalSettings(db.Model):
     legal_external_url = db.Column(db.String(1000))
     # AI transparency (#647)
     ai_transparency_md = db.Column(db.Text)
+    # Public sections (NULL = default set; the risk register is private by default)
+    public_sections = db.Column(db.JSON)
     # Metadata
     updated_at = db.Column(db.DateTime(timezone=True))
     updated_by = db.Column(db.String(36))

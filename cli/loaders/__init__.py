@@ -20,3 +20,6 @@ LOADER_REGISTRY = [
     RiskRegisterLoader,
     PentestFindingsLoader,
 ]
+
+# Engine dataset name → loader class.
+LOADERS_BY_DATASET = {loader.dataset: loader for loader in LOADER_REGISTRY}

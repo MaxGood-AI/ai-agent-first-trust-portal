@@ -1,116 +1,59 @@
-# Trust Portal — AWS IAM Assets
+# Trust Portal — AWS IAM policy
 
-This directory holds the canonical IAM documents for deploying the
-`ai-agent-first-trust-portal` on AWS. These files are the single source of
-truth for the permissions the portal's evidence collectors need — the
-portal's onboarding wizard reads them at runtime to display exactly what
-an admin must grant.
+`trust-portal-collector-policy.json` is the read-only IAM policy the evidence
+collectors need, and nothing more: every action in it is one the collectors or
+the collector permission check (`app/services/permission_prober.py`) call.
+The portal's collector setup screen and
+`GET /api/collectors/<name>/required-policy` read it at runtime to show exactly
+what to grant, and the AWS deployment template grants it to the portal's
+runtime role. `deploy/aws/tests/test_iam_actions.py` derives the called
+operations from the code and fails when the policy and the code disagree.
 
-## Files
+## Where it is granted
 
-| File | Purpose |
-|---|---|
-| `trust-portal-collector-policy.json` | Read-only IAM permissions policy for the collector role. Attached to `trust-portal-collector-role`. |
-| `trust-portal-task-role-trust-policy.json` | Trust policy for the ECS task role. Allows `ecs-tasks.amazonaws.com` to assume it. |
-| `trust-portal-collector-role-trust-policy.json` | Trust policy for the collector role. Allows the task role to assume it. Replace `ACCOUNT_ID` with your actual AWS account ID. |
-| `terraform/` | Terraform module that provisions both roles and attaches the policy. See `terraform/README.md`. |
-
-## Architecture — two-role pattern
-
-```
-ECS Fargate task  ────(assumes)───▶  trust-portal-collector-role
-     │                                          │
-     │                                          │ read-only scan perms
-     ▼                                          ▼
-trust-portal-task-role           IAM / RDS / S3 / EC2 / ELB / ACM /
-     │                            ElastiCache / ECS / KMS / CloudTrail /
-     │ minimum perms              CloudWatch Logs / STS
-     ▼
- Secrets Manager (portal secrets)
- CloudWatch Logs (self-logging)
- sts:AssumeRole → collector-role
-```
-
-- **`trust-portal-task-role`** is attached to the ECS task. It has only
-  the permissions the portal container itself needs to operate: reading
-  its own secrets from Secrets Manager, writing its own logs, and
-  assuming the collector role.
-- **`trust-portal-collector-role`** contains all read-only scan
-  permissions. The task role assumes it at collection time via STS.
-
-This isolates collector permissions from portal operation. A bug in the
-portal's request-handling code cannot exercise collector permissions
-except during an explicit `AssumeRole` call, which shows up cleanly in
-CloudTrail.
-
-## Deploying with Terraform (recommended)
-
-See [`terraform/README.md`](terraform/README.md) for a drop-in module.
-
-## Deploying manually (AWS CLI)
-
-```bash
-ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-
-# Task role
-aws iam create-role \
-  --role-name trust-portal-task-role \
-  --assume-role-policy-document file://trust-portal-task-role-trust-policy.json
-
-# Collector role — first substitute the account ID into the trust policy
-sed "s/ACCOUNT_ID/${ACCOUNT_ID}/" trust-portal-collector-role-trust-policy.json \
-  > /tmp/collector-trust.json
-aws iam create-role \
-  --role-name trust-portal-collector-role \
-  --assume-role-policy-document file:///tmp/collector-trust.json
-
-# Attach the read-only policy to the collector role
-aws iam put-role-policy \
-  --role-name trust-portal-collector-role \
-  --policy-name trust-portal-collector-read-only \
-  --policy-document file://trust-portal-collector-policy.json
-
-# Allow the task role to assume the collector role
-cat > /tmp/task-assume.json <<EOF
-{
-  "Version": "2012-10-17",
-  "Statement": [{
-    "Effect": "Allow",
-    "Action": "sts:AssumeRole",
-    "Resource": "arn:aws:iam::${ACCOUNT_ID}:role/trust-portal-collector-role"
-  }]
-}
-EOF
-aws iam put-role-policy \
-  --role-name trust-portal-task-role \
-  --policy-name trust-portal-task-assume-collector \
-  --policy-document file:///tmp/task-assume.json
-```
+- **AWS deployment (`deploy/aws/trust-portal.yaml`).** The runtime role carries
+  every statement of this file (its tests keep the two identical), with the
+  per-repository CodeCommit statement scoped by the `CollectorRepositoryPattern`
+  parameter. The portal reaches AWS as that role through collector credential
+  mode `task_role`. See `deploy/README.md`.
+- **Any other hosting.** Attach the policy to the identity the portal uses:
+  an IAM role assumed by the container, or an IAM user whose access keys are
+  given to a collector in `access_keys` credential mode.
 
 ## What the permissions cover
 
-Each SID in `trust-portal-collector-policy.json` maps to one AWS service:
+Each `Sid` maps to one service, all read-only:
 
 - `TrustPortalCollectorSTS` — identity detection (`sts:GetCallerIdentity`)
-- `TrustPortalCollectorIAMReadOnly` — users, MFA, password policy, access keys, credential reports
-- `TrustPortalCollectorRDSReadOnly` — instances, clusters, snapshots, subnet groups
-- `TrustPortalCollectorS3ReadOnly` — bucket list, encryption, versioning, policy, ACL, replication, logging, public access block
-- `TrustPortalCollectorEC2ReadOnly` — security groups, VPCs, subnets, instances, snapshots, volumes, network ACLs, flow logs
-- `TrustPortalCollectorELBReadOnly` — load balancers, listeners, target groups, SSL policies
-- `TrustPortalCollectorACMReadOnly` — certificates
-- `TrustPortalCollectorElastiCacheReadOnly` — cache clusters, snapshots, replication groups
-- `TrustPortalCollectorECSReadOnly` — clusters, services, task definitions
-- `TrustPortalCollectorKMSReadOnly` — keys, rotation status, aliases
-- `TrustPortalCollectorCloudTrailReadOnly` — trails, trail status, event selectors
-- `TrustPortalCollectorCloudWatchLogsReadOnly` — log groups, log streams (metadata only)
+- `TrustPortalCollectorIAMReadOnly` — users, access keys, MFA devices (assigned and virtual), password policy
+- `TrustPortalCollectorRDSReadOnly` — database instances
+- `TrustPortalCollectorS3ReadOnly` — bucket list, default encryption, versioning, public access block
+- `TrustPortalCollectorCloudTrailReadOnly` — trails and trail status
+- `TrustPortalCollectorCodeCommitList` — repository list and approval rule templates (git collector)
+- `TrustPortalCollectorCodeCommitRepositories` — per-repository approval rules and pull requests (git collector)
 
-To remove a service from coverage, delete its SID block and re-apply. The
-portal will continue to operate; the relevant per-service checks will
-simply report `skipped` or `error` results.
+Removing a statement removes that coverage; the matching checks then report
+`skipped` or `error` and the portal keeps running.
 
-## Non-AWS deployments
+## Witness verifier policy
 
-If you're running the portal outside AWS, none of these files are
-required. Configure the AWS collector in `access-keys` credential mode
-with an IAM user's long-lived credentials, or disable the AWS collector
-entirely. See the main repo README for alternatives.
+`trust-portal-witness-verifier-policy.json` is the read-only policy for an
+auditor who verifies the published audit chain heads and the archives with
+`python -m cli audit-verify --witness-s3`: `s3:ListBucketVersions` on the
+archive bucket for prefixes `archives/` and `chain-heads/`, and `s3:GetObject`
+and `s3:GetObjectVersion` on both. Replace `ARCHIVE_BUCKET` with the bucket
+name. The AWS deployment creates the same policy as a managed policy (the core
+stack's `WitnessVerifierPolicyArn` output).
+
+## Archive operator policy
+
+`trust-portal-archive-operator-policy.json` is for the cutover operator who
+runs `python -m cli audit-archive-manifest` and `python -m cli audit-anchor`
+with their own credentials: `s3:PutObject` and `s3:AbortMultipartUpload` on
+`archives/*` (the dump goes up as a multipart upload), `s3:PutObject` on
+`chain-heads/*` (the archived chain's final head), and the same reads as the
+verifier. The portal's runtime role never gets it: its only S3 write is
+`chain-heads/*`, and it is explicitly denied writes to `archives/*`. The AWS
+deployment creates it as a managed policy (`ArchiveOperatorPolicyArn`).
+`deploy/aws/tests/test_iam_actions.py` keeps it equal to the S3 operations the
+witness and archive code calls.

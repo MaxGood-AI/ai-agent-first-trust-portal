@@ -1,14 +1,25 @@
 """Collector executor — runs a collector and persists results to the database.
 
-The executor owns the lifecycle of a ``CollectorRun``:
+The executor owns the lifecycle of a claimed ``CollectorRun`` (status
+``running``; the scheduler's claim sets its ``executor_token``):
 
-1. Mark the run as ``running`` with a start time.
+1. Read the collector's configuration into a detached copy and end the
+   transaction, so no transaction (and no table lock) stays open while
+   credentials are resolved and the collector works.
 2. Resolve credentials (errors fail the run fast).
-3. Instantiate the collector class from the registry.
+3. Instantiate the collector class from the registry with the copy.
 4. Call ``collector.run()`` and receive ``CheckResult`` objects.
 5. For each CheckResult, create a ``CollectorCheckResult`` row and (for
-   pass/fail checks with an evidence description) an ``Evidence`` row.
-6. Mark the run as ``success``, ``partial``, or ``failure`` and write counts.
+   pass/fail checks with an evidence description and a matching test) an
+   ``Evidence`` row, committing each check on its own.
+6. Record ``success``, ``partial`` or ``failure`` with the counts
+   compare-and-set: the run changes only while it is still ``running`` under
+   the executor's token, and only then does the configuration's last-run
+   status follow.
+
+Under the scheduler every commit also verifies that the executor still holds
+the run's target lock (``scheduler.RunGuard``); an executor that lost it
+records nothing further.
 
 All database work happens inside the caller's Flask app context so audit
 triggers capture changes correctly.
@@ -17,6 +28,9 @@ triggers capture changes correctly.
 import logging
 import uuid
 from datetime import datetime, timezone
+
+from sqlalchemy import inspect as sa_inspect
+from sqlalchemy import update
 
 from app.models import CollectorCheckResult, CollectorRun, Evidence, TestRecord, db
 from app.models.collector_config import CollectorConfig
@@ -32,6 +46,10 @@ logger = logging.getLogger(__name__)
 
 class CollectorExecutionError(Exception):
     pass
+
+
+def _now():
+    return datetime.now(timezone.utc)
 
 
 def _resolve_test_record(target_test_name: str | None) -> TestRecord | None:
@@ -64,40 +82,82 @@ def _maybe_create_evidence(
         evidence_type="automated",
         description=check_result.evidence_description,
         collector_name=collector_name,
-        collected_at=datetime.now(timezone.utc),
+        collected_at=_now(),
     )
     db.session.add(evidence)
     return evidence
+
+
+def _detached_copy(config: CollectorConfig) -> CollectorConfig:
+    """A transient CollectorConfig carrying ``config``'s column values.
+
+    The collector reads its settings from the copy, so nothing it reads
+    needs the database session.
+    """
+    columns = sa_inspect(CollectorConfig).column_attrs
+    return CollectorConfig(**{column.key: getattr(config, column.key) for column in columns})
+
+
+def _record_outcome(run_id: str, token: str | None, config_id: str | None = None, **values) -> bool:
+    """Write the run's terminal values compare-and-set; returns whether they applied.
+
+    The update applies only while the run is ``running`` under ``token``.
+    When it applies and ``config_id`` is given, the configuration's last-run
+    time and status follow in the same transaction.
+    """
+    token_matches = (CollectorRun.executor_token.is_(None) if token is None
+                     else CollectorRun.executor_token == token)
+    recorded = db.session.execute(
+        update(CollectorRun)
+        .where(CollectorRun.id == run_id, CollectorRun.status == "running", token_matches)
+        .values(**values)
+        .execution_options(synchronize_session=False)
+    ).rowcount
+    if recorded != 1:
+        db.session.rollback()
+        logger.warning("Collector run %s is no longer running under this executor; "
+                       "its outcome (%s) is not recorded", run_id, values.get("status"))
+        return False
+    if config_id is not None:
+        db.session.execute(
+            update(CollectorConfig)
+            .where(CollectorConfig.id == config_id)
+            .values(last_run_at=values["finished_at"], last_run_status=values["status"])
+            .execution_options(synchronize_session=False)
+        )
+    db.session.commit()
+    return True
 
 
 def execute_run(
     run: CollectorRun,
     resolver: CredentialResolver | None = None,
 ) -> CollectorRun:
-    """Execute a pre-created CollectorRun and persist its results.
+    """Execute a claimed CollectorRun and persist its results.
 
-    ``run`` must already be flushed to the DB with ``status='running'``.
-    Returns the same ``run`` object with updated status/counters.
+    ``run`` must already be committed with ``status='running'``. Returns the
+    same ``run`` object; its attributes reload the recorded row on access.
     """
-    config: CollectorConfig = run.config
+    run_id = run.id
+    token = run.executor_token
+    config_id = run.collector_config_id
+    config = _detached_copy(run.config)
+    db.session.commit()  # no transaction stays open while the collector works
+
     resolver = resolver or CredentialResolver()
 
     collector_cls = get_collector_class(config.name)
     if collector_cls is None:
-        run.status = "failure"
-        run.error_message = f"No collector registered for name '{config.name}'"
-        run.finished_at = datetime.now(timezone.utc)
-        db.session.commit()
+        _record_outcome(run_id, token, status="failure", finished_at=_now(),
+                        error_message=f"No collector registered for name '{config.name}'")
         return run
 
     # Resolve credentials up front so we fail fast with a clear error.
     try:
         resolver.resolve(config)
     except CredentialResolutionError as exc:
-        run.status = "failure"
-        run.error_message = f"Credential resolution failed: {exc}"
-        run.finished_at = datetime.now(timezone.utc)
-        db.session.commit()
+        _record_outcome(run_id, token, status="failure", finished_at=_now(),
+                        error_message=f"Credential resolution failed: {exc}")
         return run
 
     collector: BaseCollector = collector_cls(config=config, resolver=resolver)
@@ -106,10 +166,8 @@ def execute_run(
         check_results = collector.run()
     except Exception as exc:  # noqa: BLE001
         logger.exception("Collector %s raised during run()", config.name)
-        run.status = "failure"
-        run.error_message = str(exc)
-        run.finished_at = datetime.now(timezone.utc)
-        db.session.commit()
+        db.session.rollback()
+        _record_outcome(run_id, token, status="failure", finished_at=_now(), error_message=str(exc))
         return run
 
     pass_count = 0
@@ -120,41 +178,39 @@ def execute_run(
         test_record = _resolve_test_record(cr.target_test_name)
         evidence = _maybe_create_evidence(cr, test_record, collector_name=config.name)
         if evidence is not None:
-            db.session.flush()  # populate evidence.id
+            db.session.flush()  # the evidence row exists before the check result refers to it
             evidence_count += 1
 
-        row = CollectorCheckResult(
+        db.session.add(CollectorCheckResult(
             id=str(uuid.uuid4()),
-            collector_run_id=run.id,
+            collector_run_id=run_id,
             check_name=cr.check_name,
             target_test_id=test_record.id if test_record else None,
             status=cr.status,
             evidence_id=evidence.id if evidence else None,
             message=cr.message,
             detail=cr.detail or None,
-        )
-        db.session.add(row)
+        ))
+        db.session.commit()
 
         if cr.status == "pass":
             pass_count += 1
         elif cr.status == "fail":
             fail_count += 1
 
-    run.check_pass_count = pass_count
-    run.check_fail_count = fail_count
-    run.evidence_count = evidence_count
-    run.finished_at = datetime.now(timezone.utc)
-
     if fail_count == 0 and pass_count > 0:
-        run.status = "success"
+        status = "success"
     elif pass_count > 0:
-        run.status = "partial"
+        status = "partial"
     else:
-        run.status = "failure"
+        status = "failure"
 
-    # Propagate the last-run-status back onto the config for the dashboard.
-    config.last_run_at = run.finished_at
-    config.last_run_status = run.status
-
-    db.session.commit()
+    _record_outcome(
+        run_id, token, config_id=config_id,
+        status=status,
+        finished_at=_now(),
+        check_pass_count=pass_count,
+        check_fail_count=fail_count,
+        evidence_count=evidence_count,
+    )
     return run

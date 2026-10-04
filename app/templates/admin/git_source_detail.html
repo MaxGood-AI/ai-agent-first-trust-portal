@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Git Source {{ source.name }}{% endblock %}
+
+{% block content %}
+<h1>Git source: {{ source.name }}</h1>
+<p><a href="{{ url_for('admin_git.git_sources') }}">&larr; All git sources</a></p>
+
+{% include "admin/_flash.html" %}
+
+<table>
+    <tr><th>Role</th><td>{{ source.role }}</td></tr>
+    <tr><th>Provider</th><td>{{ source.provider }}</td></tr>
+    <tr><th>Repository</th><td><code>{{ source.repository }}</code> @ {{ source.branch }}</td></tr>
+    <tr><th>Credentials</th><td>{{ source.credential_mode }}{% if source.has_stored_credentials %} (stored, encrypted){% endif %}</td></tr>
+    <tr><th>Last synced commit</th><td><code>{{ source.last_synced_commit or '—' }}</code> {% if source.last_synced_at %}at {{ source.last_synced_at[:19] | replace('T', ' ') }} UTC{% endif %}</td></tr>
+    <tr><th>Path mappings</th><td><pre>{{ source.effective_path_mappings | tojson(indent=2) }}</pre></td></tr>
+</table>
+
+<form method="POST" action="{{ url_for('admin_git.git_source_sync', source_ref=source.id) }}">
+    {{ csrf_field() }}
+    <label><input type="checkbox" name="full"> Full re-import (process every mapped file again)</label>
+    <button type="submit">Sync now</button>
+</form>
+
+<h2>Configuration</h2>
+<form method="POST" action="{{ url_for('admin_git.git_source_update', source_ref=source.id) }}" class="team-form">
+    {{ csrf_field() }}
+    <div class="form-row"><label for="repository">Repository</label><input id="repository" name="repository" value="{{ source.repository }}"></div>
+    <div class="form-row"><label for="branch">Branch</label><input id="branch" name="branch" value="{{ source.branch }}"></div>
+    <div class="form-row"><label for="region">AWS region</label><input id="region" name="region" value="{{ source.region or '' }}"></div>
+    <div class="form-row"><label for="credential_mode">Credentials</label><input id="credential_mode" name="credential_mode" value="{{ source.credential_mode }}"></div>
+    <div class="form-row"><label for="role_arn">Role ARN (assume role; leave blank to keep)</label><input id="role_arn" name="role_arn"></div>
+    <div class="form-row"><label for="external_id">External ID</label><input id="external_id" name="external_id"></div>
+    <div class="form-row"><label for="token">Token (stored token; leave blank to keep)</label><input id="token" name="token" type="password" autocomplete="off"></div>
+    <div class="form-row"><label for="schedule_cron">Schedule (crontab, UTC)</label><input id="schedule_cron" name="schedule_cron" value="{{ source.schedule_cron or '' }}"></div>
+    <div class="form-row"><label for="history_limit">History limit per sync</label><input id="history_limit" name="history_limit" value="{{ source.options.history_limit }}"></div>
+    <div class="form-row"><label><input type="checkbox" name="enabled" {% if source.enabled %}checked{% endif %}> Enabled</label></div>
+    <div class="form-row"><label><input type="checkbox" name="record_commits" {% if source.options.record_commits %}checked{% endif %}> Record change records</label></div>
+    <button type="submit">Save</button>
+</form>
+
+<h2>Start from a commit (cutover)</h2>
+<p>The next sync reads only the changes after this commit.</p>
+<form method="POST" action="{{ url_for('admin_git.git_source_set_commit', source_ref=source.id) }}" class="team-form">
+    {{ csrf_field() }}
+    <div class="form-row"><label for="commit_id">Commit SHA</label><input id="commit_id" name="commit_id" required pattern="[0-9a-fA-F]{40}([0-9a-fA-F]{24})?"></div>
+    <button type="submit" data-confirm="Set the last synced commit? Changes before it will not be read.">Set last synced commit</button>
+</form>
+
+{% if flagged %}
+<h2>Files needing attention</h2>
+<table class="data-table">
+    <thead><tr><th>Path</th><th>Status</th><th>Detail</th></tr></thead>
+    <tbody>
+        {% for f in flagged %}
+        <tr><td><code>{{ f.path }}</code></td><td>{{ f.status }}</td><td>{{ f.status_detail or '' }}</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+
+<h2>Recent syncs</h2>
+{% if runs %}
+<table class="data-table">
+    <thead><tr><th>Queued</th><th>Trigger</th><th>Status</th><th>Range</th><th>Files</th><th>Created</th><th>Updated</th><th>Unchanged</th><th>Deleted</th><th>Flagged</th><th>Errors</th></tr></thead>
+    <tbody>
+        {% for run in runs %}
+        {% set c = run.counts or {} %}
+        <tr>
+            <td>{{ run.queued_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+            <td>{{ run.trigger_type }}</td>
+            <td>{{ run.status }}{% if run.error_message %}<br><span class="help-text">{{ run.error_message }}</span>{% endif %}</td>
+            <td><code>{{ (run.from_commit or '')[:8] }}</code>..<code>{{ (run.to_commit or '')[:8] }}</code></td>
+            <td>{{ run.files_changed }}</td>
+            <td>{{ c.get('created', 0) }}</td><td>{{ c.get('updated', 0) }}</td><td>{{ c.get('unchanged', 0) }}</td>
+            <td>{{ c.get('deleted', 0) }}</td><td>{{ c.get('flagged', 0) }}</td><td>{{ c.get('errors', 0) }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>No syncs yet.</p>
+{% endif %}
+{% endblock %}

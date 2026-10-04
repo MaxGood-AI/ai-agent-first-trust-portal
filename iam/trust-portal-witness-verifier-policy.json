@@ -1,0 +1,33 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ListWitnessVersions",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucketVersions"
+      ],
+      "Resource": "arn:aws:s3:::ARCHIVE_BUCKET",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": [
+            "archives/*",
+            "chain-heads/*"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "ReadArchivesAndHeads",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:GetObjectVersion"
+      ],
+      "Resource": [
+        "arn:aws:s3:::ARCHIVE_BUCKET/archives/*",
+        "arn:aws:s3:::ARCHIVE_BUCKET/chain-heads/*"
+      ]
+    }
+  ]
+}

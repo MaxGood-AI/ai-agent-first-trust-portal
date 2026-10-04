@@ -41,6 +41,15 @@
                 body: '{}',
             })
                 .then(function (resp) { return resp.json(); })
+                .then(function (queued) {
+                    if (!queued.poll_url) {
+                        return queued;
+                    }
+                    btn.textContent = 'Queued\u2026';
+                    return window.trustPortalPollRun(queued.poll_url, function (run) {
+                        btn.textContent = run.status === 'running' ? 'Running\u2026' : 'Queued\u2026';
+                    }).then(function (final) { return final.run || final; });
+                })
                 .then(function (data) {
                     const ok = data.status === 'success';
                     renderResult(

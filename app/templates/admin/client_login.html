@@ -13,6 +13,7 @@
     {% endif %}
 
     <form method="POST" action="{{ url_for('admin.client_login') }}" style="margin-top: 1.5rem;">
+        {{ csrf_field() }}
         <div style="margin-bottom: 1rem;">
             <input type="text" name="api_key" placeholder="Paste your access key here"
                    required autofocus

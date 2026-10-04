@@ -67,10 +67,10 @@ If you **already have** `agent-config/claude/settings.json` (for example, for a 
 
 ```json
 "SessionStart": [
-  { "matcher": "startup", "hooks": [{ "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/sessionstart-repo-status.py\"", "timeout": 90000 }] },
-  { "matcher": "resume",  "hooks": [{ "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/sessionstart-repo-status.py\"", "timeout": 90000 }] },
-  { "matcher": "clear",   "hooks": [{ "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/sessionstart-repo-status.py\"", "timeout": 90000 }] },
-  { "matcher": "compact", "hooks": [{ "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/sessionstart-repo-status.py\"", "timeout": 90000 }] }
+  { "matcher": "startup", "hooks": [{ "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/sessionstart-repo-status.py\"", "timeout": 90 }] },
+  { "matcher": "resume",  "hooks": [{ "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/sessionstart-repo-status.py\"", "timeout": 90 }] },
+  { "matcher": "clear",   "hooks": [{ "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/sessionstart-repo-status.py\"", "timeout": 90 }] },
+  { "matcher": "compact", "hooks": [{ "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/sessionstart-repo-status.py\"", "timeout": 90 }] }
 ]
 ```
 

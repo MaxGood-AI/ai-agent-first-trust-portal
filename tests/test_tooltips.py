@@ -75,9 +75,13 @@ def test_vendors_page_has_subprocessor_tooltip(app_ctx, client):
 
 
 def test_risks_page_has_tooltips(app_ctx, client):
+    from app.services.settings_service import DEFAULT_PUBLIC_SECTIONS, update_portal_settings
+
     with app_ctx.app_context():
         db.session.add(RiskRegister(id="risk-tt", name="Test Risk", likelihood=3, impact=4))
         db.session.commit()
+        # The risk register is private by default; publish it for this page.
+        update_portal_settings({"public_sections": list(DEFAULT_PUBLIC_SECTIONS) + ["risks"]})
 
     resp = client.get("/risks")
     assert b"tooltip-content" in resp.data

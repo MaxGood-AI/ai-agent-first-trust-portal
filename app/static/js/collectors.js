@@ -149,12 +149,19 @@
 
     wireActionButton('run-now-btn', function (result) {
         const data = result.data || {};
-        const ok = data.status === 'success';
-        renderResult(
-            'Run ' + (data.status || 'unknown'),
-            data,
-            ok,
-        );
+        if (!data.poll_url) {
+            renderResult('Run ' + (data.status || 'failed'), data, false);
+            return;
+        }
+        renderResult('Run ' + data.status, data, true);
+        window.trustPortalPollRun(data.poll_url, function (run) {
+            renderResult('Run ' + run.status, run, run.status !== 'failure');
+        }).then(function (final) {
+            const run = final.run || final;
+            renderResult('Run ' + run.status, final, run.status === 'success');
+        }).catch(function (err) {
+            renderResult('Run status unknown', { error: String(err) }, false);
+        });
     });
 
     // ---- IAM policy load + copy ----

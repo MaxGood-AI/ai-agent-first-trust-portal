@@ -121,7 +121,7 @@ def test_task_role_assume_calls_sts(app_ctx):
     config = _make_config(
         credential_mode="task_role_assume",
         encrypted_credentials=encrypt_credentials(
-            {"role_arn": "arn:aws:iam::123:role/trust-portal-collector-role"}
+            {"role_arn": "arn:aws:iam::123:role/trust-portal-collector-role", "external_id": "ext-1"}
         ),
         config={"region": "ca-central-1"},
     )
@@ -138,26 +138,74 @@ def test_task_role_assume_calls_sts(app_ctx):
             "Expiration": expiration,
         }
     }
-
     base_session = MagicMock()
     base_session.client.return_value = sts_mock
 
-    assumed_session = MagicMock()
-    assumed_session.region_name = "ca-central-1"
-
-    with patch("boto3.Session", side_effect=[base_session, assumed_session]) as mock_session:
+    with patch("app.services.aws_session.get_session", return_value=base_session):
         resolver = CredentialResolver()
         resolved = resolver.resolve(config)
+        frozen = resolved.boto_session.get_credentials().get_frozen_credentials()
 
     sts_mock.assume_role.assert_called_once()
     call_kwargs = sts_mock.assume_role.call_args.kwargs
     assert call_kwargs["RoleArn"] == "arn:aws:iam::123:role/trust-portal-collector-role"
     assert call_kwargs["RoleSessionName"] == "trust-portal-aws"
+    assert call_kwargs["ExternalId"] == "ext-1"
     assert resolved.mode == "task_role_assume"
-    assert resolved.expires_at == expiration
-    # Second call should use cached credentials
+    assert frozen.access_key == "ASIATEST"
+    # Second call uses the cached, self-refreshing session.
     resolver.resolve(config)
     assert sts_mock.assume_role.call_count == 1
+
+
+def test_task_role_assume_failure_is_normalized(app_ctx):
+    config = _make_config(
+        credential_mode="task_role_assume",
+        encrypted_credentials=encrypt_credentials({"role_arn": "arn:aws:iam::123:role/x"}),
+    )
+    db.session.add(config)
+    db.session.commit()
+    base_session = MagicMock()
+    base_session.client.return_value.assume_role.side_effect = RuntimeError("AccessDenied")
+    with patch("app.services.aws_session.get_session", return_value=base_session):
+        with pytest.raises(CredentialResolutionError, match="sts:AssumeRole failed"):
+            CredentialResolver().resolve(config)
+
+
+def test_task_role_uses_runtime_session(app_ctx):
+    config = _make_config(credential_mode="task_role", config={"region": "eu-west-1"})
+    db.session.add(config)
+    db.session.commit()
+    sentinel = MagicMock()
+    with patch("app.services.aws_session.get_session", return_value=sentinel) as get_session:
+        resolved = CredentialResolver().resolve(config)
+    get_session.assert_called_once_with("eu-west-1")
+    assert resolved.boto_session is sentinel
+
+
+def test_access_keys_mode_accepts_platform_bearer_token(app_ctx):
+    config = _make_config(
+        name="platform",
+        credential_mode="access_keys",
+        encrypted_credentials=encrypt_credentials({"bearer_token": "tok"}),
+    )
+    db.session.add(config)
+    db.session.commit()
+    resolved = CredentialResolver().resolve(config)
+    assert resolved.mode == "access_keys"
+    assert resolved.boto_session is None
+    assert resolved.raw == {"bearer_token": "tok"}
+
+
+def test_access_keys_mode_accepts_platform_basic_auth(app_ctx):
+    config = _make_config(
+        name="platform",
+        credential_mode="access_keys",
+        encrypted_credentials=encrypt_credentials({"basic_user": "u", "basic_password": "p"}),
+    )
+    db.session.add(config)
+    db.session.commit()
+    assert CredentialResolver().resolve(config).raw == {"basic_user": "u", "basic_password": "p"}
 
 
 def test_resolved_credentials_expiry_detection():

@@ -6,10 +6,11 @@ probe:
     {
       "services": [
         {
-          "name": "maxgoodai-prod",
+          "name": "api-prod",
           "url": "https://api.example.com",
           "health_path": "/api/health",
-          "auth": "none"    // or "bearer" / "basic"
+          "auth": "none",   // or "bearer" / "basic"
+          "allow_private": false
         }
       ],
       "http_timeout_seconds": 10
@@ -17,14 +18,24 @@ probe:
 
 If a service requires bearer or basic auth, the credential is decrypted
 from ``encrypted_credentials`` under keys ``bearer_token`` or
-``basic_user``/``basic_password``. Credentials are shared across services
-in v1; per-service credentials can be added later if needed.
+``basic_user``/``basic_password``. Credentials are shared across services.
+
+Probes go through ``app.services.safe_http.safe_get``: only http(s) URLs,
+redirects followed and re-checked, credentials sent only to the service's own
+origin. A service whose host (or any redirect hop) resolves to a private,
+loopback, link-local, multicast, reserved or cloud metadata address is
+refused and reported as failing, unless the service sets
+``"allow_private": true`` (the JSON boolean; default false), which admits
+private, shared (``100.64.0.0/10``) and loopback addresses for an
+organisation's internal services. Link-local and cloud metadata addresses
+are refused even then.
 """
 
 import logging
 from typing import Any
 
 from app.services.collector_encryption import decrypt_credentials
+from app.services.safe_http import release, safe_get
 from collectors.base import BaseCollector, CheckResult
 
 logger = logging.getLogger(__name__)
@@ -72,17 +83,6 @@ class PlatformCollector(BaseCollector):
                     )
                 ]
 
-        try:
-            import requests
-        except ImportError:
-            return [
-                CheckResult(
-                    check_name="platform_http",
-                    status="error",
-                    message="requests library is not installed",
-                )
-            ]
-
         results: list[CheckResult] = []
         for service in services:
             name = service.get("name") or service.get("url") or "unknown"
@@ -117,13 +117,15 @@ class PlatformCollector(BaseCollector):
                     auth_tuple = (user, pw)
 
             try:
-                resp = requests.get(
+                resp = safe_get(
                     full_url,
                     headers=headers,
                     auth=auth_tuple,
                     timeout=timeout,
-                    allow_redirects=True,
+                    allow_private=service.get("allow_private") is True,
+                    stream=True,
                 )
+                release(resp)
                 passed = 200 <= resp.status_code < 400
                 results.append(
                     CheckResult(

@@ -5,6 +5,7 @@ from cli.loaders.base import BaseLoader
 
 
 class SystemsLoader(BaseLoader):
+    dataset = "systems"
     model_class = System
     file_name = "systems.json"
 

@@ -2,15 +2,18 @@
 
 Reads vendors directly from the portal database. No AWS/IAM permissions
 required. Optionally probes each vendor's ``security_page_url`` to verify
-it's reachable, but only when the config flag ``probe_urls`` is set and
-``requests`` is available.
+it's reachable, but only when the config flag ``probe_urls`` is set. Probes go
+through ``app.services.safe_http.safe_get``: a URL that is not http(s), or
+whose host (or any redirect hop) resolves to a private, loopback, link-local,
+multicast, reserved or cloud metadata address, is refused and reported as
+unreachable without being requested.
 """
 
 import logging
 from typing import Any
 
 from app.models import Vendor
-from collectors.base import BaseCollector, CheckResult
+from collectors.base import BaseCollector, CheckResult, read_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +35,7 @@ class VendorCollector(BaseCollector):
         http_timeout = int(config_dict.get("http_timeout_seconds", 5))
 
         try:
-            vendors = Vendor.query.order_by(Vendor.name).all()
+            vendors = read_snapshot(Vendor.query.order_by(Vendor.name))
         except Exception as exc:  # noqa: BLE001
             logger.exception("Failed to query vendors")
             return [
@@ -141,24 +144,20 @@ class VendorCollector(BaseCollector):
 
 
 def _probe_url(url: str, timeout: int = 5) -> dict[str, Any]:
-    """Attempt an HTTP GET against ``url`` and return a structured result.
+    """Attempt a checked HTTP GET against ``url`` (redirects followed and
+    re-checked by ``safe_get``) and return a structured result.
 
     Lives at module level so it's easily mockable in tests.
     """
-    try:
-        import requests
-    except ImportError:
-        return {
-            "reachable": False,
-            "status_code": None,
-            "error": "requests library not available",
-        }
+    from app.services.safe_http import release, safe_get
 
     try:
-        resp = requests.get(url, timeout=timeout, allow_redirects=True)
+        resp = safe_get(url, timeout=timeout, stream=True)
+        status_code = resp.status_code
+        release(resp)
         return {
-            "reachable": resp.status_code < 400,
-            "status_code": resp.status_code,
+            "reachable": status_code < 400,
+            "status_code": status_code,
             "error": None,
         }
     except Exception as exc:  # noqa: BLE001

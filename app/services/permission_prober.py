@@ -74,6 +74,10 @@ def _probe_iam_list_mfa_devices(session: Any) -> None:
         iam.list_virtual_mfa_devices(MaxItems=1)
 
 
+def _probe_iam_list_virtual_mfa_devices(session: Any) -> None:
+    session.client("iam").list_virtual_mfa_devices(MaxItems=1)
+
+
 def _probe_iam_list_access_keys(session: Any) -> None:
     iam = session.client("iam")
     users = iam.list_users(MaxItems=1).get("Users", [])
@@ -188,10 +192,12 @@ AWS_ACTION_PROBES: dict[str, Callable[[Any], None]] = {
     "sts:GetCallerIdentity": _probe_sts_get_caller_identity,
     "iam:ListUsers": _probe_iam_list_users,
     "iam:ListMFADevices": _probe_iam_list_mfa_devices,
+    "iam:ListVirtualMFADevices": _probe_iam_list_virtual_mfa_devices,
     "iam:ListAccessKeys": _probe_iam_list_access_keys,
     "iam:GetAccountPasswordPolicy": _probe_iam_get_account_password_policy,
     "s3:ListAllMyBuckets": _probe_s3_list_all_my_buckets,
-    "s3:GetBucketEncryption": _probe_s3_get_bucket_encryption,
+    # The IAM action behind the GetBucketEncryption API is s3:GetEncryptionConfiguration.
+    "s3:GetEncryptionConfiguration": _probe_s3_get_bucket_encryption,
     "s3:GetBucketVersioning": _probe_s3_get_bucket_versioning,
     "s3:GetBucketPublicAccessBlock": _probe_s3_get_bucket_public_access_block,
     "rds:DescribeDBInstances": _probe_rds_describe_db_instances,

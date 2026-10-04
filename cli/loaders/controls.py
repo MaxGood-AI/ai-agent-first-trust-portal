@@ -5,6 +5,7 @@ from cli.loaders.base import BaseLoader
 
 
 class ControlsLoader(BaseLoader):
+    dataset = "controls"
     model_class = Control
     file_name = "controls.json"
 
@@ -17,9 +18,4 @@ class ControlsLoader(BaseLoader):
 
     def _build_record(self, item):
         """Extract owner.id/owner.name from nested object before standard build."""
-        item = dict(item)
-        owner = item.get("owner")
-        if isinstance(owner, dict):
-            item["owner_id"] = owner.get("id")
-            item["owner_name"] = owner.get("name")
-        return super()._build_record(item)
+        return super()._build_record(self._with_owner(item))

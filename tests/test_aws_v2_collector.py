@@ -30,6 +30,7 @@ from app.services import team_service
 from app.services.collector_executor import execute_run
 from app.services.credential_resolver import CredentialResolver
 from app.services.permission_prober import PermissionProber
+from app.services import scheduler
 from collectors.aws import AWSCollector
 from collectors.aws.collector import AWS_REQUIRED_PERMISSIONS
 
@@ -53,7 +54,7 @@ def admin_headers(app_ctx):
     admin = team_service.create_member(
         "Admin", "admin@example.com", "human", is_compliance_admin=True
     )
-    return {"X-API-Key": admin.api_key}
+    return {"X-API-Key": admin.issued_api_key}
 
 
 @pytest.fixture
@@ -276,8 +277,9 @@ def test_run_endpoint_executes_and_reports_results(client, admin_headers):
     )
 
     resp = client.post("/api/collectors/aws/run", headers=admin_headers)
-    assert resp.status_code == 200
-    data = resp.get_json()
+    assert resp.status_code == 202
+    assert scheduler.dispatch_once() == 1
+    data = client.get(resp.get_json()["poll_url"], headers=admin_headers).get_json()["run"]
     assert data["status"] in ("success", "partial", "failure")
     assert data["finished_at"] is not None
 
@@ -295,7 +297,7 @@ def test_run_endpoint_unknown_collector_404(client, admin_headers):
     db.session.commit()
     # OK — aws is registered, this should work.
     resp = client.post("/api/collectors/aws/run", headers=admin_headers)
-    assert resp.status_code == 200
+    assert resp.status_code == 202
 
 
 def test_required_policy_endpoint(client, admin_headers):

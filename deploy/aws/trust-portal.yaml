@@ -1,0 +1,917 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  AI-agent-first trust portal on Amazon Lightsail (core stack): container
+  service, private PostgreSQL database, certificate, identity, secrets, logs,
+  write-once archive bucket and daily database snapshots. The optional CI/CD
+  is deploy/aws/trust-portal-pipeline.yaml. Runbook: deploy/README.md.
+
+Parameters:
+  OrgPrefix:
+    Type: String
+    AllowedPattern: '^[a-z][a-z0-9]{1,7}$'
+    Description: Organisation prefix of every name (2-8 lowercase characters), e.g. acme.
+  AppName:
+    Type: String
+    Default: trust-portal
+    AllowedPattern: '^[a-z][a-z0-9-]{0,10}[a-z0-9]$'
+    Description: Application segment of every resource name (2-12 characters).
+  EnvironmentName:
+    Type: String
+    Default: prod
+    AllowedPattern: '^[a-z][a-z0-9]{1,4}$'
+    Description: Environment segment of every name (2-5 characters).
+  DomainName:
+    Type: String
+    Default: ''
+    Description: Custom domain, e.g. trust.example.com; empty uses the Lightsail URL.
+  AttachCustomDomain:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['false', 'true']
+    Description: Set to true once the certificate status is ISSUED.
+  HostedZoneId:
+    Type: String
+    Default: ''
+    Description: Route 53 zone of DomainName; set to create its CNAME.
+  ImageSource:
+    Type: String
+    Default: ecr
+    AllowedValues: [ecr, public]
+    Description: 'ecr = private ECR repository; public = public image URIs.'
+  ContainerPower:
+    Type: String
+    Default: small
+    AllowedValues: [nano, micro, small, medium, large, xlarge]
+  ContainerScale:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 20
+  ContainerPort:
+    Type: Number
+    Default: 5100
+  HealthCheckPath:
+    Type: String
+    Default: /api/health
+  DatabaseBlueprintId:
+    Type: String
+    Default: postgres_17
+  DatabaseBundleId:
+    Type: String
+    Default: micro_2_0
+  DatabaseName:
+    Type: String
+    Default: trust_portal
+    AllowedPattern: '^[a-z][a-z0-9_]{0,62}$'
+  DatabaseMasterUsername:
+    Type: String
+    Default: dbmasteruser
+    AllowedPattern: '^[a-z][a-z0-9_]{0,62}$'
+    Description: Lightsail master user; the portal runs migrations as this owner role.
+  DatabaseAppUsername:
+    Type: String
+    Default: portal_app
+    AllowedPattern: '^[a-z][a-z0-9_]{0,62}$'
+    Description: Least-privilege role the portal creates and serves requests as.
+  DatabaseBackupWindow:
+    Type: String
+    Default: '05:00-05:30'
+    Description: Daily UTC window for the automatic point-in-time backups.
+  DatabaseMaintenanceWindow:
+    Type: String
+    Default: 'sun:08:00-sun:08:30'
+    Description: Weekly UTC maintenance window.
+  SnapshotScheduleExpression:
+    Type: String
+    Default: 'cron(15 6 * * ? *)'
+    Description: EventBridge Scheduler expression (UTC) for the daily database snapshot.
+  SnapshotRetentionDays:
+    Type: Number
+    Default: 35
+    MinValue: 1
+  SnapshotMinimumKept:
+    Type: Number
+    Default: 7
+    MinValue: 1
+    Description: Newest available snapshots kept whatever their age.
+  LogRetentionDays:
+    Type: Number
+    Default: 30
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653]
+  ArchiveRetentionYears:
+    Type: Number
+    Default: 7
+    MinValue: 1
+    MaxValue: 100
+    Description: Object Lock compliance-mode retention of every object in the archive bucket.
+  GovernanceRepository:
+    Type: String
+    Default: ''
+    Description: CodeCommit repository of policies and governance documents.
+  EvidenceRepository:
+    Type: String
+    Default: ''
+    Description: CodeCommit repository the portal syncs evidence from.
+  CollectorRepositoryPattern:
+    Type: String
+    Default: '*'
+    AllowedPattern: '^[\w.*-]+$'
+    Description: Repositories (name or wildcard) whose pull requests the git collector reads.
+  CodeCommitKmsKeyArn:
+    Type: String
+    Default: ''
+    Description: Customer managed KMS key of the repositories; empty for aws/codecommit.
+  AccessKeySerial:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    Description: Increment to rotate the portal's access key, then redeploy.
+  CollectorAssumableRoleArns:
+    Type: CommaDelimitedList
+    Default: ''
+    AllowedPattern: '^(arn:aws[a-z-]*:iam::[0-9]{12}:role/[\w+=,.@/-]+)?$'
+    Description: Roles task_role_assume collectors may assume; empty grants none.
+Rules:
+  AppUserIsNotOwner:
+    Assertions:
+      - Assert: !Not [!Equals [!Ref DatabaseAppUsername, !Ref DatabaseMasterUsername]]
+        AssertDescription: The portal refuses to serve as the owner; DatabaseAppUsername must differ from DatabaseMasterUsername.
+  AttachNeedsDomain:
+    RuleCondition: !Equals [!Ref AttachCustomDomain, 'true']
+    Assertions:
+      - Assert: !Not [!Equals [!Ref DomainName, '']]
+        AssertDescription: AttachCustomDomain needs DomainName.
+
+Conditions:
+  UseEcr: !Equals [!Ref ImageSource, ecr]
+  HasDomain: !Not [!Equals [!Ref DomainName, '']]
+  AttachDomain: !And [!Condition HasDomain, !Equals [!Ref AttachCustomDomain, 'true']]
+  CreateDnsRecord: !And [!Condition AttachDomain, !Not [!Equals [!Ref HostedZoneId, '']]]
+  HasGovernanceRepo: !Not [!Equals [!Ref GovernanceRepository, '']]
+  HasEvidenceRepo: !Not [!Equals [!Ref EvidenceRepository, '']]
+  HasGitSourceRepo: !Or [!Condition HasGovernanceRepo, !Condition HasEvidenceRepo]
+  HasKmsKey: !Not [!Equals [!Ref CodeCommitKmsKeyArn, '']]
+  HasAssumableRoles: !Not [!Equals [!Join ['', !Ref CollectorAssumableRoleArns], '']]
+
+Resources:
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub /lightsail/${OrgPrefix}-${AppName}-${EnvironmentName}
+      RetentionInDays: !Ref LogRetentionDays
+
+  # Created as {} (never rewritten by CloudFormation); PortalSecretValues fills them.
+  PortalSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub ${OrgPrefix}-${AppName}-${EnvironmentName}
+      Description: !Sub Trust portal runtime secret, read by the runtime role (deploy/aws/trust-portal.yaml, stack ${AWS::StackName}).
+      SecretString: '{}'
+
+  OwnerSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub ${OrgPrefix}-${AppName}-db-owner-${EnvironmentName}
+      Description: !Sub Database owner credentials, read at deploy only (deploy/aws/trust-portal.yaml, stack ${AWS::StackName}).
+      SecretString: '{}'
+
+  SecretInitRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${OrgPrefix}-lambda-${AppName}-secret-init-${EnvironmentName}
+      Path: /
+      Description: !Sub Fills the trust portal secrets at stack create and update (deploy/aws/trust-portal.yaml, stack ${AWS::StackName}).
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: TrustLambda
+            Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition: {StringEquals: {'aws:SourceAccount': !Ref 'AWS::AccountId'}}
+      Policies:
+        - PolicyName: !Sub ${OrgPrefix}-lambda-${AppName}-secret-init-${EnvironmentName}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: FillPortalSecrets
+                Effect: Allow
+                Action: ['secretsmanager:GetSecretValue', 'secretsmanager:PutSecretValue']
+                Resource: [!Ref PortalSecret, !Ref OwnerSecret]
+              - Sid: SecretInitLogs
+                Effect: Allow
+                Action: ['logs:CreateLogStream', 'logs:PutLogEvents']
+                Resource: !GetAtt SecretInitLogGroup.Arn
+
+  SecretInitLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${OrgPrefix}-${AppName}-secret-init-${EnvironmentName}
+      RetentionInDays: !Ref LogRetentionDays
+
+  SecretInitFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: SecretInitLogGroup
+    Properties:
+      FunctionName: !Sub ${OrgPrefix}-${AppName}-secret-init-${EnvironmentName}
+      Description: Fills the trust portal secrets (deploy/aws/lambdas/secret_init.py).
+      Runtime: python3.13
+      Handler: index.handler
+      Timeout: 60
+      MemorySize: 128
+      Role: !GetAtt SecretInitRole.Arn
+      Environment:
+        Variables:
+          STACK_ID: !Ref 'AWS::StackId'
+          SECRET_SPECS: !Sub '[{"SecretId":"${PortalSecret}","Generate":{"SECRET_KEY":"session-key","DATABASE_PASSWORD":"password","BOOTSTRAP_TOKEN":"token","COLLECTOR_ENCRYPTION_KEYS":"fernet"},"Regenerable":["SECRET_KEY","DATABASE_PASSWORD","BOOTSTRAP_TOKEN"],"Fixed":{"CLOUDWATCH_LOG_GROUP":"${LogGroup}"},"Remove":["DATABASE_OWNER_USER","DATABASE_OWNER_PASSWORD","DATABASE_OWNER_URL","AUDIT_WITNESS_BUCKET"]},{"SecretId":"${OwnerSecret}","Generate":{"DATABASE_OWNER_PASSWORD":"password"},"Fixed":{"DATABASE_OWNER_USER":"${DatabaseMasterUsername}"}}]'
+      Code:
+        # Source of truth: deploy/aws/lambdas/secret_init.py
+        ZipFile: |
+          """Custom resource that fills the portal's secrets (see deploy/README.md).
+
+          The secrets and what to do with them come only from SECRET_SPECS (set by the
+          template), never from the event; a request for any stack but STACK_ID is
+          ignored. Adds each missing Generate key, sets Fixed keys, deletes Remove keys,
+          and never changes a key that holds a value. A key absent or blank after
+          creation is regenerated only if listed in Regenerable; otherwise, or when a
+          secret is not a JSON object, the resource fails and nothing is written.
+          """
+          import base64
+          import json
+          import os
+          import secrets
+
+          import cfnresponse
+
+          GENERATORS = {
+              "password": lambda: secrets.token_urlsafe(24),
+              "token": lambda: secrets.token_urlsafe(32),
+              "session-key": lambda: secrets.token_urlsafe(48),
+              "fernet": lambda: base64.urlsafe_b64encode(os.urandom(32)).decode(),
+          }
+
+
+          class SecretSpecError(Exception):
+              pass
+
+
+          def complete(client, secret_id, generate, fixed, remove, regenerable=(), creating=False):
+              raw = client.get_secret_value(SecretId=secret_id)["SecretString"]
+              try:
+                  current = json.loads(raw)
+              except ValueError:
+                  current = None
+              if not isinstance(current, dict):
+                  raise SecretSpecError("secret %s does not hold a JSON object; restore its JSON value "
+                                        "(no key is regenerated), then update the stack again" % secret_id)
+              needed = sorted(k for k in generate if not current.get(k))
+              blocked = [k for k in needed if k not in regenerable and (k in current or not creating)]
+              if blocked:
+                  raise SecretSpecError("secret %s: %s absent or blank and not regenerable; restore the "
+                                        "value(s), then update the stack again" % (secret_id, ", ".join(blocked)))
+              for key in needed:
+                  current[key] = GENERATORS[generate[key]]()
+              removed = sorted(k for k in remove if k in current)
+              for key in removed:
+                  del current[key]
+              changed = bool(needed or removed)
+              for key, value in fixed.items():
+                  if current.get(key) != value:
+                      current[key] = value
+                      changed = True
+              if changed:
+                  client.put_secret_value(SecretId=secret_id, SecretString=json.dumps(current))
+              return needed, removed
+
+
+          def handler(event, context):
+              if event.get("StackId") != os.environ.get("STACK_ID"):
+                  print(json.dumps({"event": "secret_init_ignored", "reason": "request is not from this stack"}))
+                  return
+              specs = json.loads(os.environ["SECRET_SPECS"])
+              status, reason = cfnresponse.SUCCESS, None
+              try:
+                  if event["RequestType"] in ("Create", "Update"):
+                      import boto3
+                      client = boto3.client("secretsmanager")
+                      for spec in specs:
+                          added, removed = complete(client, spec["SecretId"], spec.get("Generate", {}),
+                                                    spec.get("Fixed", {}), spec.get("Remove", []),
+                                                    spec.get("Regenerable", []), event["RequestType"] == "Create")
+                          print(json.dumps({"event": "secret_completed", "secret": spec["SecretId"],
+                                            "keys_added": added, "keys_removed": removed}))
+              except SecretSpecError as exc:
+                  status, reason = cfnresponse.FAILED, str(exc)
+              except Exception as exc:
+                  status, reason = cfnresponse.FAILED, "secret init failed: %s" % type(exc).__name__
+              if status == cfnresponse.FAILED:
+                  print(json.dumps({"event": "secret_init_failed", "reason": reason}))
+              physical_id = specs[0]["SecretId"] if specs else event.get("PhysicalResourceId", "portal-secrets")
+              cfnresponse.send(event, context, status, {}, physical_id, reason=reason)
+
+  # The function acts only on its own SECRET_SPECS; Spec (the same text) only
+  # makes CloudFormation re-run it when the spec changes.
+  PortalSecretValues:
+    Type: Custom::PortalSecrets
+    Properties:
+      ServiceToken: !GetAtt SecretInitFunction.Arn
+      ServiceTimeout: 300
+      Spec: !Sub '[{"SecretId":"${PortalSecret}","Generate":{"SECRET_KEY":"session-key","DATABASE_PASSWORD":"password","BOOTSTRAP_TOKEN":"token","COLLECTOR_ENCRYPTION_KEYS":"fernet"},"Regenerable":["SECRET_KEY","DATABASE_PASSWORD","BOOTSTRAP_TOKEN"],"Fixed":{"CLOUDWATCH_LOG_GROUP":"${LogGroup}"},"Remove":["DATABASE_OWNER_USER","DATABASE_OWNER_PASSWORD","DATABASE_OWNER_URL","AUDIT_WITNESS_BUCKET"]},{"SecretId":"${OwnerSecret}","Generate":{"DATABASE_OWNER_PASSWORD":"password"},"Fixed":{"DATABASE_OWNER_USER":"${DatabaseMasterUsername}"}}]'
+
+  SecretInitPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SecretInitFunction
+      Action: lambda:InvokeFunction
+      Principal: cloudformation.amazonaws.com
+      SourceArn: !Ref 'AWS::StackId'
+      SourceAccount: !Ref 'AWS::AccountId'
+
+  User:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Sub ${OrgPrefix}-${AppName}-${EnvironmentName}
+      Path: /
+      Policies:
+        - PolicyName: !Sub ${OrgPrefix}-${AppName}-${EnvironmentName}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: AssumeRuntimeRole
+                Effect: Allow
+                Action: sts:AssumeRole
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${OrgPrefix}-user-${AppName}-${EnvironmentName}
+
+  AccessKey:
+    Type: AWS::IAM::AccessKey
+    Properties:
+      UserName: !Ref User
+      Serial: !Ref AccessKeySerial
+
+  CredentialsSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub ${OrgPrefix}-${AppName}-credentials-${EnvironmentName}
+      Description: !Sub Base access key injected into the container environment at deploy (deploy/aws/trust-portal.yaml, stack ${AWS::StackName}).
+      SecretString: !Sub '{"AWS_ACCESS_KEY_ID":"${AccessKey}","AWS_SECRET_ACCESS_KEY":"${AccessKey.SecretAccessKey}"}'
+
+  RuntimeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${OrgPrefix}-user-${AppName}-${EnvironmentName}
+      Path: /
+      Description: !Sub Trust portal runtime role, assumed by IAM user ${User} (deploy/aws/trust-portal.yaml, stack ${AWS::StackName}).
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: TrustPortalUser
+            Effect: Allow
+            Principal: {AWS: !GetAtt User.Arn}
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                'sts:ExternalId': !Select [2, !Split ['/', !Ref 'AWS::StackId']]
+      Policies:
+        - PolicyName: !Sub ${OrgPrefix}-user-${AppName}-${EnvironmentName}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # BEGIN iam/trust-portal-collector-policy.json
+              - {"Sid": "TrustPortalCollectorSTS", "Effect": "Allow", "Action": ["sts:GetCallerIdentity"], "Resource": "*"}
+              - {"Sid": "TrustPortalCollectorIAMReadOnly", "Effect": "Allow", "Action": ["iam:ListUsers", "iam:ListAccessKeys", "iam:ListMFADevices", "iam:ListVirtualMFADevices", "iam:GetAccountPasswordPolicy"], "Resource": "*"}
+              - {"Sid": "TrustPortalCollectorRDSReadOnly", "Effect": "Allow", "Action": ["rds:DescribeDBInstances"], "Resource": "*"}
+              - {"Sid": "TrustPortalCollectorS3ReadOnly", "Effect": "Allow", "Action": ["s3:ListAllMyBuckets", "s3:GetEncryptionConfiguration", "s3:GetBucketVersioning", "s3:GetBucketPublicAccessBlock"], "Resource": "*"}
+              - {"Sid": "TrustPortalCollectorCloudTrailReadOnly", "Effect": "Allow", "Action": ["cloudtrail:DescribeTrails", "cloudtrail:GetTrailStatus"], "Resource": "*"}
+              - {"Sid": "TrustPortalCollectorCodeCommitList", "Effect": "Allow", "Action": ["codecommit:ListRepositories", "codecommit:ListApprovalRuleTemplates"], "Resource": "*"}
+              # END iam/trust-portal-collector-policy.json
+              - Sid: TrustPortalCollectorCodeCommitRepositories
+                Effect: Allow
+                Action: ['codecommit:ListAssociatedApprovalRuleTemplatesForRepository', 'codecommit:ListPullRequests', 'codecommit:GetPullRequest']
+                Resource: !Sub 'arn:${AWS::Partition}:codecommit:${AWS::Region}:${AWS::AccountId}:${CollectorRepositoryPattern}'
+              - !If
+                - HasGitSourceRepo
+                - Sid: GitSourceRead
+                  Effect: Allow
+                  Action: ['codecommit:GetBranch', 'codecommit:GetCommit', 'codecommit:GetDifferences', 'codecommit:GetFile', 'codecommit:GetBlob']
+                  Resource:
+                    - !If [HasGovernanceRepo, !Sub 'arn:${AWS::Partition}:codecommit:${AWS::Region}:${AWS::AccountId}:${GovernanceRepository}', !Ref 'AWS::NoValue']
+                    - !If [HasEvidenceRepo, !Sub 'arn:${AWS::Partition}:codecommit:${AWS::Region}:${AWS::AccountId}:${EvidenceRepository}', !Ref 'AWS::NoValue']
+                - !Ref 'AWS::NoValue'
+              - !If
+                - HasKmsKey
+                - Sid: CodeCommitKeyDecrypt
+                  Effect: Allow
+                  Action: kms:Decrypt
+                  Resource: !Ref CodeCommitKmsKeyArn
+                  Condition: {StringEquals: {'kms:ViaService': !Sub 'codecommit.${AWS::Region}.amazonaws.com'}}
+                - !Ref 'AWS::NoValue'
+              - Sid: PortalSecretRead
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref PortalSecret
+              - Sid: PortalLogs
+                Effect: Allow
+                Action: ['logs:CreateLogStream', 'logs:PutLogEvents']
+                Resource: !GetAtt LogGroup.Arn
+              - !If
+                - HasAssumableRoles
+                - {Sid: AssumeCollectorRoles, Effect: Allow, Action: 'sts:AssumeRole', Resource: !Ref CollectorAssumableRoleArns}
+                - !Ref 'AWS::NoValue'
+              - Sid: PublishChainHeads
+                Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub '${ArchiveBucket.Arn}/chain-heads/*'
+              - Sid: ListWitnessVersions
+                Effect: Allow
+                Action: s3:ListBucketVersions
+                Resource: !GetAtt ArchiveBucket.Arn
+                Condition: {StringLike: {'s3:prefix': ['archives/*', 'chain-heads/*']}}
+              - Sid: ReadManifestsAndHeads
+                Effect: Allow
+                Action: ['s3:GetObject', 's3:GetObjectVersion']
+                Resource: [!Sub '${ArchiveBucket.Arn}/archives/*.manifest.json', !Sub '${ArchiveBucket.Arn}/chain-heads/*']
+              - Sid: HeadsOnlySseS3
+                Effect: Deny
+                Action: s3:PutObject
+                Resource: !Sub '${ArchiveBucket.Arn}/chain-heads/*'
+                Condition:
+                  'Null': {'s3:x-amz-server-side-encryption': 'false'}
+                  StringNotEquals: {'s3:x-amz-server-side-encryption': AES256}
+              - Sid: NoSseCHeads
+                Effect: Deny
+                Action: s3:PutObject
+                Resource: !Sub '${ArchiveBucket.Arn}/chain-heads/*'
+                Condition: {'Null': {'s3:x-amz-server-side-encryption-customer-algorithm': 'false'}}
+              - Sid: NoArchiveWrites
+                Effect: Deny
+                Action: ['s3:PutObject', 's3:AbortMultipartUpload']
+                Resource: !Sub '${ArchiveBucket.Arn}/archives/*'
+
+  Database:
+    Type: AWS::Lightsail::Database
+    DependsOn: PortalSecretValues
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RelationalDatabaseName: !Sub ${OrgPrefix}-${AppName}-db-${EnvironmentName}
+      RelationalDatabaseBlueprintId: !Ref DatabaseBlueprintId
+      RelationalDatabaseBundleId: !Ref DatabaseBundleId
+      MasterDatabaseName: !Ref DatabaseName
+      MasterUsername: !Ref DatabaseMasterUsername
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${OwnerSecret}:SecretString:DATABASE_OWNER_PASSWORD}}'
+      PubliclyAccessible: false
+      BackupRetention: true
+      PreferredBackupWindow: !Ref DatabaseBackupWindow
+      PreferredMaintenanceWindow: !Ref DatabaseMaintenanceWindow
+
+  ContainerService:
+    Type: AWS::Lightsail::Container
+    Properties:
+      ServiceName: !Sub ${OrgPrefix}-${AppName}-${EnvironmentName}
+      Power: !Ref ContainerPower
+      Scale: !Ref ContainerScale
+      PrivateRegistryAccess:
+        EcrImagePullerRole:
+          IsActive: !If [UseEcr, true, false]
+      PublicDomainNames: !If
+        - AttachDomain
+        - - CertificateName: !Ref Certificate
+            DomainNames: [!Ref DomainName]
+        - !Ref 'AWS::NoValue'
+
+  ImageRepository:
+    Type: AWS::ECR::Repository
+    Condition: UseEcr
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Sub ${OrgPrefix}-${AppName}-${EnvironmentName}
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration: {ScanOnPush: true}
+      EncryptionConfiguration: {EncryptionType: AES256}
+      LifecyclePolicy:
+        LifecyclePolicyText: >-
+          {"rules":[{"rulePriority":1,"description":"Expire untagged images after 1 day",
+          "selection":{"tagStatus":"untagged","countType":"sinceImagePushed","countUnit":"days","countNumber":1},
+          "action":{"type":"expire"}},{"rulePriority":2,"description":"Keep the 30 most recent images",
+          "selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":30},"action":{"type":"expire"}}]}
+      RepositoryPolicyText:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: LightsailImagePull
+            Effect: Allow
+            Principal: {AWS: !GetAtt ContainerService.PrivateRegistryAccess.EcrImagePullerRole.PrincipalArn}
+            Action: ['ecr:BatchGetImage', 'ecr:GetDownloadUrlForLayer']
+
+  Certificate:
+    Type: AWS::Lightsail::Certificate
+    Condition: HasDomain
+    Properties:
+      CertificateName: !Sub ${OrgPrefix}-${AppName}-${EnvironmentName}
+      DomainName: !Ref DomainName
+
+  DnsRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: CreateDnsRecord
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref DomainName
+      Type: CNAME
+      TTL: '300'
+      ResourceRecords: [!Select [2, !Split ['/', !GetAtt ContainerService.Url]]]
+
+  ArchiveBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub ${OrgPrefix}-${AppName}-archive-${EnvironmentName}-${AWS::AccountId}-${AWS::Region}
+      ObjectLockEnabled: true
+      ObjectLockConfiguration:
+        ObjectLockEnabled: Enabled
+        Rule:
+          DefaultRetention: {Mode: COMPLIANCE, Years: !Ref ArchiveRetentionYears}
+      VersioningConfiguration: {Status: Enabled}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules: [{ObjectOwnership: BucketOwnerEnforced}]
+      LifecycleConfiguration:
+        Rules:
+          - Id: GlacierInstantRetrievalAfter30Days
+            Status: Enabled
+            Transitions: [{StorageClass: GLACIER_IR, TransitionInDays: 30}]
+          - Id: AbortIncompleteUploadsAfter7Days
+            Status: Enabled
+            AbortIncompleteMultipartUpload: {DaysAfterInitiation: 7}
+
+  ArchiveBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ArchiveBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource: [!GetAtt ArchiveBucket.Arn, !Sub '${ArchiveBucket.Arn}/*']
+            Condition: {Bool: {'aws:SecureTransport': 'false'}}
+          - Sid: DenyHeadWriteWithoutIfNoneMatch
+            Effect: Deny
+            Principal: '*'
+            Action: s3:PutObject
+            Resource: !Sub '${ArchiveBucket.Arn}/chain-heads/*'
+            Condition: {'Null': {'s3:if-none-match': 'true'}}
+          - Sid: DenyArchiveWriteWithoutIfNoneMatch
+            Effect: Deny
+            Principal: '*'
+            Action: s3:PutObject
+            Resource: !Sub '${ArchiveBucket.Arn}/archives/*'
+            Condition:
+              'Null': {'s3:if-none-match': 'true'}
+              Bool: {'s3:ObjectCreationOperation': 'true'}
+          - Sid: DenyNonSseS3Writes
+            Effect: Deny
+            Principal: '*'
+            Action: s3:PutObject
+            Resource: [!Sub '${ArchiveBucket.Arn}/chain-heads/*', !Sub '${ArchiveBucket.Arn}/archives/*']
+            Condition:
+              'Null': {'s3:x-amz-server-side-encryption': 'false'}
+              StringNotEquals: {'s3:x-amz-server-side-encryption': AES256}
+          - Sid: DenySseCWrites
+            Effect: Deny
+            Principal: '*'
+            Action: s3:PutObject
+            Resource: [!Sub '${ArchiveBucket.Arn}/chain-heads/*', !Sub '${ArchiveBucket.Arn}/archives/*']
+            Condition: {'Null': {'s3:x-amz-server-side-encryption-customer-algorithm': 'false'}}
+          - Sid: DenyDeletes
+            Effect: Deny
+            Principal: '*'
+            Action: ['s3:DeleteObject', 's3:DeleteObjectVersion']
+            Resource: !Sub '${ArchiveBucket.Arn}/*'
+          - Sid: DenyRetentionChanges
+            Effect: Deny
+            Principal: '*'
+            Action: ['s3:PutObjectRetention', 's3:PutBucketObjectLockConfiguration']
+            Resource: [!GetAtt ArchiveBucket.Arn, !Sub '${ArchiveBucket.Arn}/*']
+
+  WitnessVerifierPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub ${OrgPrefix}-${AppName}-witness-verifier-${EnvironmentName}
+      Description: Read the audit chain heads and archives (all versions) for cli audit-verify --witness-s3.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ListWitnessVersions
+            Effect: Allow
+            Action: s3:ListBucketVersions
+            Resource: !GetAtt ArchiveBucket.Arn
+            Condition: {StringLike: {'s3:prefix': ['archives/*', 'chain-heads/*']}}
+          - Sid: ReadArchivesAndHeads
+            Effect: Allow
+            Action: ['s3:GetObject', 's3:GetObjectVersion']
+            Resource: [!Sub '${ArchiveBucket.Arn}/archives/*', !Sub '${ArchiveBucket.Arn}/chain-heads/*']
+
+  ArchiveOperatorPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub ${OrgPrefix}-${AppName}-archive-operator-${EnvironmentName}
+      Description: Cutover operator - archive upload, manifest and final head (cli audit-archive-manifest, audit-anchor).
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: WriteArchives
+            Effect: Allow
+            Action: ['s3:PutObject', 's3:AbortMultipartUpload']
+            Resource: !Sub '${ArchiveBucket.Arn}/archives/*'
+          - Sid: PublishFinalHead
+            Effect: Allow
+            Action: s3:PutObject
+            Resource: !Sub '${ArchiveBucket.Arn}/chain-heads/*'
+          - Sid: ListWitnessVersions
+            Effect: Allow
+            Action: s3:ListBucketVersions
+            Resource: !GetAtt ArchiveBucket.Arn
+            Condition: {StringLike: {'s3:prefix': ['archives/*', 'chain-heads/*']}}
+          - Sid: ReadArchivesAndHeads
+            Effect: Allow
+            Action: ['s3:GetObject', 's3:GetObjectVersion']
+            Resource: [!Sub '${ArchiveBucket.Arn}/archives/*', !Sub '${ArchiveBucket.Arn}/chain-heads/*']
+
+  SnapshotRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${OrgPrefix}-lambda-${AppName}-db-snapshot-${EnvironmentName}
+      Path: /
+      Description: !Sub Daily trust portal database snapshot and pruning (deploy/aws/trust-portal.yaml, stack ${AWS::StackName}).
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: TrustLambda
+            Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition: {StringEquals: {'aws:SourceAccount': !Ref 'AWS::AccountId'}}
+      Policies:
+        - PolicyName: !Sub ${OrgPrefix}-lambda-${AppName}-db-snapshot-${EnvironmentName}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: CreateTaggedSnapshot
+                Effect: Allow
+                Action: lightsail:CreateRelationalDatabaseSnapshot
+                Resource: '*'
+                Condition:
+                  StringEquals: {'aws:RequestTag/trust-portal-stack': !Select [2, !Split ['/', !Ref 'AWS::StackId']]}
+                  ForAllValues:StringEquals: {'aws:TagKeys': [trust-portal-stack]}
+              - Sid: ListSnapshots
+                Effect: Allow
+                Action: lightsail:GetRelationalDatabaseSnapshots
+                Resource: '*'
+                Condition: {StringEquals: {'aws:RequestedRegion': !Ref 'AWS::Region'}}
+              - Sid: DeleteOwnSnapshots
+                Effect: Allow
+                Action: lightsail:DeleteRelationalDatabaseSnapshot
+                Resource: !Sub arn:${AWS::Partition}:lightsail:${AWS::Region}:${AWS::AccountId}:RelationalDatabaseSnapshot/*
+                Condition:
+                  StringEquals: {'aws:ResourceTag/trust-portal-stack': !Select [2, !Split ['/', !Ref 'AWS::StackId']]}
+              - Sid: SnapshotLogs
+                Effect: Allow
+                Action: ['logs:CreateLogStream', 'logs:PutLogEvents']
+                Resource: !GetAtt SnapshotLogGroup.Arn
+
+  SnapshotLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${OrgPrefix}-${AppName}-db-snapshot-${EnvironmentName}
+      RetentionInDays: !Ref LogRetentionDays
+
+  SnapshotFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: SnapshotLogGroup
+    Properties:
+      FunctionName: !Sub ${OrgPrefix}-${AppName}-db-snapshot-${EnvironmentName}
+      Description: Daily trust portal database snapshot and pruning (deploy/aws/lambdas/db_snapshot.py).
+      Runtime: python3.13
+      Handler: index.lambda_handler
+      Timeout: 120
+      MemorySize: 128
+      Role: !GetAtt SnapshotRole.Arn
+      Environment:
+        Variables:
+          DATABASE_NAME: !Sub ${OrgPrefix}-${AppName}-db-${EnvironmentName}
+          SNAPSHOT_PREFIX: !Sub ${OrgPrefix}-${AppName}-db-${EnvironmentName}-
+          RETENTION_DAYS: !Ref SnapshotRetentionDays
+          MIN_SNAPSHOTS: !Ref SnapshotMinimumKept
+          SNAPSHOT_TAG_KEY: trust-portal-stack
+          SNAPSHOT_TAG_VALUE: !Select [2, !Split ['/', !Ref 'AWS::StackId']]
+      Code:
+        # Source of truth: deploy/aws/lambdas/db_snapshot.py
+        ZipFile: |
+          """Daily snapshot <SNAPSHOT_PREFIX><YYYYMMDD-HHMMSS> (UTC) of DATABASE_NAME,
+          tagged SNAPSHOT_TAG_KEY=SNAPSHOT_TAG_VALUE. Then deletes that database's tagged,
+          "available" snapshots of that name shape older than RETENTION_DAYS, keeping the
+          newest MIN_SNAPSHOTS; nothing else is touched. {"dry_run": true} changes nothing.
+          """
+          import datetime
+          import json
+          import os
+          import re
+
+          STAMP = "%Y%m%d-%H%M%S"
+
+
+          def log(event, **fields):
+              print(json.dumps(dict(fields, event=event), default=str, sort_keys=True))
+
+
+          def load_config(env):
+              database = env.get("DATABASE_NAME", "").strip()
+              prefix = env.get("SNAPSHOT_PREFIX", "").strip()
+              retention = int(env.get("RETENTION_DAYS", "35"))
+              minimum = int(env.get("MIN_SNAPSHOTS", "7"))
+              tag = (env.get("SNAPSHOT_TAG_KEY", "").strip(), env.get("SNAPSHOT_TAG_VALUE", "").strip())
+              if not database:
+                  raise ValueError("DATABASE_NAME is required")
+              if not all(tag):
+                  raise ValueError("SNAPSHOT_TAG_KEY and SNAPSHOT_TAG_VALUE are required")
+              if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,200}-", prefix):
+                  raise ValueError("SNAPSHOT_PREFIX must be lowercase letters, digits "
+                                   "and hyphens, ending in a hyphen")
+              if retention < 1:
+                  raise ValueError("RETENTION_DAYS must be at least 1")
+              if minimum < 1:
+                  raise ValueError("MIN_SNAPSHOTS must be at least 1")
+              return database, prefix, retention, minimum, tag
+
+
+          def list_snapshots(client):
+              token = None
+              while True:
+                  kwargs = {"pageToken": token} if token else {}
+                  page = client.get_relational_database_snapshots(**kwargs)
+                  yield from page.get("relationalDatabaseSnapshots", [])
+                  token = page.get("nextPageToken")
+                  if not token:
+                      return
+
+
+          def tagged(snapshot, tag):
+              return any(t.get("key") == tag[0] and t.get("value") == tag[1] for t in snapshot.get("tags") or [])
+
+
+          def expired(snapshots, database, prefix, cutoff, minimum, tag):
+              pattern = re.compile(re.escape(prefix) + r"\d{8}-\d{6}")
+              ours = [s for s in snapshots
+                      if s.get("fromRelationalDatabaseName") == database
+                      and pattern.fullmatch(s.get("name", ""))
+                      and tagged(s, tag)
+                      and s.get("state") == "available"
+                      and s.get("createdAt") is not None]
+              ours.sort(key=lambda s: s["createdAt"], reverse=True)
+              return sorted(s["name"] for s in ours[minimum:] if s["createdAt"] < cutoff)
+
+
+          def run(client, env, now, dry_run=False):
+              database, prefix, retention, minimum, tag = load_config(env)
+              name = prefix + now.strftime(STAMP)
+              cutoff = now - datetime.timedelta(days=retention)
+              result = {"database": database, "snapshot": name, "dry_run": dry_run,
+                        "retention_days": retention, "min_snapshots": minimum,
+                        "deleted": [], "failed": []}
+              if not dry_run:
+                  try:
+                      client.create_relational_database_snapshot(
+                          relationalDatabaseName=database,
+                          relationalDatabaseSnapshotName=name,
+                          tags=[{"key": tag[0], "value": tag[1]}])
+                  except Exception as exc:
+                      log("snapshot_create_failed", database=database, snapshot=name,
+                          error=type(exc).__name__, detail=str(exc)[:300])
+                      raise
+                  log("snapshot_created", database=database, snapshot=name)
+              for old in expired(list_snapshots(client), database, prefix, cutoff, minimum, tag):
+                  if dry_run:
+                      result["deleted"].append(old)
+                      continue
+                  try:
+                      client.delete_relational_database_snapshot(
+                          relationalDatabaseSnapshotName=old)
+                  except Exception as exc:
+                      result["failed"].append(old)
+                      log("snapshot_delete_failed", database=database, snapshot=old,
+                          error=type(exc).__name__, detail=str(exc)[:300])
+                      continue
+                  result["deleted"].append(old)
+                  log("snapshot_deleted", database=database, snapshot=old)
+              log("snapshot_run_complete", **result)
+              if result["failed"]:
+                  raise RuntimeError("failed to delete %d snapshot(s)" % len(result["failed"]))
+              return result
+
+
+          def lambda_handler(event, context):
+              import boto3
+              dry_run = str((event or {}).get("dry_run", "")).lower() in ("true", "1")
+              now = datetime.datetime.now(datetime.timezone.utc)
+              return run(boto3.client("lightsail"), os.environ, now, dry_run)
+
+  # No retries: a retry would take a second snapshot.
+  SnapshotInvokeConfig:
+    Type: AWS::Lambda::EventInvokeConfig
+    Properties:
+      FunctionName: !Ref SnapshotFunction
+      Qualifier: $LATEST
+      MaximumRetryAttempts: 0
+
+  SchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${OrgPrefix}-scheduler-${AppName}-db-snapshot-${EnvironmentName}
+      Path: /
+      Description: !Sub Invokes the trust portal database snapshot function (deploy/aws/trust-portal.yaml, stack ${AWS::StackName}).
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: TrustScheduler
+            Effect: Allow
+            Principal: {Service: scheduler.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition: {StringEquals: {'aws:SourceAccount': !Ref 'AWS::AccountId'}}
+      Policies:
+        - PolicyName: !Sub ${OrgPrefix}-scheduler-${AppName}-db-snapshot-${EnvironmentName}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: InvokeSnapshotFunction
+                Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: [!GetAtt SnapshotFunction.Arn, !Sub '${SnapshotFunction.Arn}:*']
+
+  SnapshotSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub ${OrgPrefix}-${AppName}-db-snapshot-${EnvironmentName}
+      Description: Daily trust portal database snapshot.
+      ScheduleExpression: !Ref SnapshotScheduleExpression
+      ScheduleExpressionTimezone: UTC
+      FlexibleTimeWindow: {Mode: 'OFF'}
+      Target:
+        Arn: !GetAtt SnapshotFunction.Arn
+        RoleArn: !GetAtt SchedulerRole.Arn
+        Input: '{}'
+        RetryPolicy: {MaximumRetryAttempts: 0, MaximumEventAgeInSeconds: 3600}
+
+Outputs:
+  OrgPrefix: {Value: !Ref OrgPrefix, Export: {Name: !Sub '${AWS::StackName}-OrgPrefix'}}
+  AppName: {Value: !Ref AppName, Export: {Name: !Sub '${AWS::StackName}-AppName'}}
+  EnvironmentName: {Value: !Ref EnvironmentName, Export: {Name: !Sub '${AWS::StackName}-EnvironmentName'}}
+  ContainerServiceArn: {Value: !GetAtt ContainerService.ContainerArn, Export: {Name: !Sub '${AWS::StackName}-ContainerServiceArn'}}
+  WitnessVerifierPolicyArn: {Value: !Ref WitnessVerifierPolicy}
+  ArchiveOperatorPolicyArn: {Value: !Ref ArchiveOperatorPolicy}
+  ContainerServiceName: {Value: !Ref ContainerService}
+  ContainerServiceUrl: {Value: !GetAtt ContainerService.Url}
+  PublicUrl: {Value: !If [AttachDomain, !Sub 'https://${DomainName}/', !GetAtt ContainerService.Url]}
+  ContainerPort: {Value: !Ref ContainerPort}
+  HealthCheckPath: {Value: !Ref HealthCheckPath}
+  DatabaseResourceName: {Value: !Sub '${OrgPrefix}-${AppName}-db-${EnvironmentName}'}
+  DatabaseName: {Value: !Ref DatabaseName}
+  DatabaseUser: {Value: !Ref DatabaseAppUsername}
+  SnapshotPrefix: {Value: !Sub '${OrgPrefix}-${AppName}-db-${EnvironmentName}-'}
+  SnapshotFunctionName: {Value: !Ref SnapshotFunction}
+  SnapshotTagValue: {Value: !Select [2, !Split ['/', !Ref 'AWS::StackId']], Export: {Name: !Sub '${AWS::StackName}-SnapshotTagValue'}}
+  PortalSecretArn: {Value: !Ref PortalSecret}
+  CredentialsSecretArn: {Value: !Ref CredentialsSecret, Export: {Name: !Sub '${AWS::StackName}-CredentialsSecretArn'}}
+  OwnerSecretArn: {Value: !Ref OwnerSecret, Export: {Name: !Sub '${AWS::StackName}-OwnerSecretArn'}}
+  IamUserName: {Value: !Ref User}
+  RuntimeRoleArn: {Value: !GetAtt RuntimeRole.Arn}
+  RuntimeRoleExternalId: {Value: !Select [2, !Split ['/', !Ref 'AWS::StackId']]}
+  LogGroupName: {Value: !Ref LogGroup}
+  ArchiveBucketName: {Value: !Ref ArchiveBucket}
+  ImageRepositoryUri:
+    Condition: UseEcr
+    Value: !GetAtt ImageRepository.RepositoryUri
+    Export: {Name: !Sub '${AWS::StackName}-ImageRepositoryUri'}
+  ImageRepositoryArn:
+    Condition: UseEcr
+    Value: !GetAtt ImageRepository.Arn
+    Export: {Name: !Sub '${AWS::StackName}-ImageRepositoryArn'}
+  CertificateName:
+    Condition: HasDomain
+    Value: !Ref Certificate

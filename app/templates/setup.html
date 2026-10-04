@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Set up the portal{% endblock %}
+
+{% block content %}
+<div class="narrow-page">
+    <h1>Create the first administrator</h1>
+
+    {% if api_key %}
+    <div class="flash success issued-key">
+        <p>Administrator <strong>{{ member.name }}</strong> created. This is their API key &mdash; copy it now; it is shown only once and is stored only as a hash:</p>
+        <p><code class="issued-key-value">{{ api_key }}</code></p>
+        <p>Setup is now closed. <a href="{{ url_for('admin.login') }}">Log in to the admin dashboard</a>.</p>
+    </div>
+    {% elif not token_configured %}
+    <p>Setup is not enabled. Set <code>BOOTSTRAP_TOKEN</code> in the portal secret (or the environment) and restart the service, then reload this page. On a machine with shell access you can instead run <code>python -m cli create-admin --name "..." --email "..."</code>.</p>
+    {% else %}
+    <p>Enter the bootstrap token from the portal secret. This page works only while no administrator holds a usable API key.</p>
+    {% if error %}
+    <div class="flash error">{{ error }}</div>
+    {% endif %}
+    <form method="POST" action="{{ url_for('setup.setup') }}">
+        {{ csrf_field() }}
+        <div class="form-row">
+            <label for="token">Bootstrap token</label>
+            <input type="password" id="token" name="token" required autocomplete="off">
+        </div>
+        <div class="form-row">
+            <label for="name">Your name</label>
+            <input type="text" id="name" name="name" required>
+        </div>
+        <div class="form-row">
+            <label for="email">Your email</label>
+            <input type="email" id="email" name="email" required>
+        </div>
+        <button type="submit">Create administrator</button>
+    </form>
+    {% endif %}
+</div>
+{% endblock %}

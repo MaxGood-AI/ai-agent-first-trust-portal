@@ -20,12 +20,15 @@
     {% if policy.short_name %}
     <tr><th>ID</th><td>{{ policy.short_name }}</td></tr>
     {% endif %}
+    {% if document %}
+    <tr><th>Document version</th><td><code>{{ document.path }}</code> at commit <code>{{ document.commit_id[:12] }}</code> (SHA-256 <code>{{ document.sha256[:12] }}</code>)</td></tr>
+    {% endif %}
 </table>
 
-{% if policy.controls %}
+{% if linked_controls %}
 <h2>Linked Controls</h2>
 <ul>
-    {% for control in policy.controls %}
+    {% for control in linked_controls %}
     <li>{{ control.control_id_short or '' }} {{ control.name }}</li>
     {% endfor %}
 </ul>
@@ -35,6 +38,8 @@
 <div class="policy-content">
     {{ html_content }}
 </div>
+{% elif document_state == 'retired' %}
+<p>This policy is no longer published in the governance repository.</p>
 {% else %}
 <p>Policy document content is not available for online viewing.</p>
 {% endif %}

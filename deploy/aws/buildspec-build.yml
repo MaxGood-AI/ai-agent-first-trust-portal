@@ -1,0 +1,58 @@
+# Build stage of the pipeline in deploy/aws/trust-portal-pipeline.yaml.
+#
+# Lints both templates in deploy/aws/ with cfn-lint, pinned to the version in
+# requirements-dev.txt (any warning or error fails the build, including W3037
+# invalid IAM actions), then
+# runs the unit suite (Dockerfile target "test", which covers tests/ and
+# deploy/aws/tests/) against PostgreSQL 17 on a private Docker network, then
+# builds the "production" target and pushes it to ECR tagged with the first 12
+# characters of the source commit. Plain docker commands only; base images come
+# from ECR Public. The tag is immutable, so a commit whose image is already in
+# ECR is not rebuilt.
+#
+# Environment: IMAGE_REPOSITORY_URI (set by the project), SOURCE_COMMIT (set by
+# the pipeline from the source action). Exports IMAGE_URI to the Deploy stage.
+version: 0.2
+
+env:
+  exported-variables:
+    - IMAGE_URI
+
+phases:
+  build:
+    on-failure: ABORT
+    commands:
+      - pip install --quiet "cfn-lint==1.57.0"
+      - cfn-lint --non-zero-exit-code warning deploy/aws/trust-portal.yaml deploy/aws/trust-portal-pipeline.yaml
+      - IMAGE_TAG=$(printf '%s' "${SOURCE_COMMIT:-$CODEBUILD_RESOLVED_SOURCE_VERSION}" | cut -c1-12)
+      - IMAGE_URI="$IMAGE_REPOSITORY_URI:$IMAGE_TAG"
+      - REPOSITORY_NAME="${IMAGE_REPOSITORY_URI#*/}"
+      - IMAGE_IDS=$(printf '[{"imageTag":"%s"}]' "$IMAGE_TAG")
+      - |
+        if aws ecr describe-images --repository-name "$REPOSITORY_NAME" --image-ids "$IMAGE_IDS" --query 'imageDetails[0].imageTags' --output text >/dev/null 2>&1; then
+          echo "Image $IMAGE_URI is already in ECR; tests passed when it was built."
+        else
+          ID="$CODEBUILD_BUILD_NUMBER"
+          docker network create "tp-test-$ID"
+          docker run -d --name "tp-db-$ID" --network "tp-test-$ID" \
+            -e POSTGRES_DB=trust_portal_test -e POSTGRES_USER=trust_portal -e POSTGRES_PASSWORD=trust_portal \
+            public.ecr.aws/docker/library/postgres:17
+          ready=0
+          for attempt in $(seq 1 60); do
+            if docker exec "tp-db-$ID" pg_isready -h 127.0.0.1 -U trust_portal -d trust_portal_test >/dev/null 2>&1; then ready=1; break; fi
+            sleep 2
+          done
+          [ "$ready" -eq 1 ] || { echo "PostgreSQL did not become ready"; exit 1; }
+          docker build --target test --tag "tp-test:$ID" .
+          STATUS=0
+          docker run --rm --network "tp-test-$ID" \
+            -e TEST_DATABASE_URL="postgresql://trust_portal:trust_portal@tp-db-$ID:5432/trust_portal_test" \
+            "tp-test:$ID" || STATUS=$?
+          docker rm -f "tp-db-$ID" >/dev/null
+          docker network rm "tp-test-$ID" >/dev/null
+          [ "$STATUS" -eq 0 ] || exit "$STATUS"
+          docker build --target production --build-arg PORTAL_VERSION="$IMAGE_TAG" --tag "$IMAGE_URI" .
+          aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "${IMAGE_REPOSITORY_URI%%/*}"
+          docker push "$IMAGE_URI"
+        fi
+      - echo "IMAGE_URI=$IMAGE_URI"

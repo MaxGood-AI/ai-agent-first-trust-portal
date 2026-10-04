@@ -9,7 +9,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from app.models import Policy
-from collectors.base import BaseCollector, CheckResult
+from collectors.base import BaseCollector, CheckResult, read_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ class PolicyCollector(BaseCollector):
         warn_threshold = now + timedelta(days=review_warning_days)
 
         try:
-            policies = Policy.query.order_by(Policy.title).all()
+            policies = read_snapshot(Policy.query.order_by(Policy.title))
         except Exception as exc:  # noqa: BLE001
             logger.exception("Failed to query policies")
             return [

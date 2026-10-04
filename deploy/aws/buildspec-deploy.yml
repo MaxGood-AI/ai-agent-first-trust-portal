@@ -1,0 +1,17 @@
+# Deploy stage of the pipeline in deploy/aws/trust-portal-pipeline.yaml.
+#
+# Environment: STACK_NAME (the core stack, set by the project), WITNESS_ARMED
+# (the pipeline stack's WitnessArmed parameter), IMAGE_URI (set by the pipeline
+# from the Build stage). Every run passes an explicit witness flag: --witness
+# only when WITNESS_ARMED is exactly "true", otherwise --no-witness. deploy.sh
+# snapshots the database, creates the Lightsail deployment, waits until it is
+# healthy and checks the portal reports the intended witness state; a failed
+# deployment exits non-zero and the previous deployment keeps serving.
+version: 0.2
+
+phases:
+  build:
+    on-failure: ABORT
+    commands:
+      - if [ "${WITNESS_ARMED:-false}" = "true" ]; then WITNESS_FLAG="--witness"; else WITNESS_FLAG="--no-witness"; fi
+      - bash deploy/aws/deploy.sh --stack "$STACK_NAME" --image "$IMAGE_URI" --region "$AWS_REGION" "$WITNESS_FLAG"

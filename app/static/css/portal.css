@@ -142,6 +142,7 @@ th { background: var(--bg); font-weight: 600; font-size: 0.85rem; text-transform
 .badge.missing, .badge.failed { background: #fed7d7; color: var(--danger); }
 .badge.outdated, .badge.due_soon { background: #feebc8; color: var(--warning); }
 .badge.draft, .badge.pending { background: #e2e8f0; color: var(--text-muted); }
+.key-missing { color: var(--danger); }
 
 /* Progress bar */
 .progress-bar {
@@ -643,4 +644,37 @@ footer a { color: var(--primary); }
     color: var(--warning);
     font-weight: 600;
     text-decoration: underline;
+}
+
+.inline-form {
+    display: inline;
+}
+
+.link-button {
+    background: none;
+    border: none;
+    padding: 0;
+    color: inherit;
+    text-decoration: underline;
+    cursor: pointer;
+    font: inherit;
+}
+
+.narrow-page {
+    max-width: 520px;
+    margin: 60px auto;
+}
+
+.issued-key-value {
+    display: block;
+    padding: 8px;
+    word-break: break-all;
+    user-select: all;
+}
+
+.commit-message {
+    white-space: pre-wrap;
+    max-width: 480px;
+    margin: 0;
+    font-size: 0.85em;
 }

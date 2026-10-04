@@ -42,13 +42,27 @@ class CollectorRun(db.Model):
         db.String(16),
         nullable=False,
         default="running",
-        comment="running | success | failure | partial",
+        comment="queued | running | success | failure | partial",
     )
     evidence_count = db.Column(db.Integer, default=0, nullable=False)
     check_pass_count = db.Column(db.Integer, default=0, nullable=False)
     check_fail_count = db.Column(db.Integer, default=0, nullable=False)
     error_message = db.Column(db.Text, nullable=True)
+    heartbeat_at = db.Column(db.DateTime(timezone=True), nullable=True,
+                             comment="Refreshed by the executing process while it holds the run's lock")
+    executor_token = db.Column(db.String(36), nullable=True,
+                               comment="Identifies the executor allowed to record this run's result")
     raw_log = db.Column(db.Text, nullable=True)
+
+    __table_args__ = (
+        db.Index(
+            "uq_collector_run_one_active",
+            "collector_config_id",
+            unique=True,
+            postgresql_where=db.text("status IN ('queued', 'running')"),
+            sqlite_where=db.text("status IN ('queued', 'running')"),
+        ),
+    )
 
     check_results = db.relationship(
         "CollectorCheckResult",

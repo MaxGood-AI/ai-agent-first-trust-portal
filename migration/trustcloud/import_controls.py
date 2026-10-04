@@ -114,7 +114,7 @@ def main():
     with open(output_path, "w") as f:
         json.dump(output, f, indent=2)
     print(f"Export written to {output_path}")
-    print("Review the export, then run import_to_db.py to load into PostgreSQL.")
+    print("Review the export, then write it into your evidence repository (docs/evidence-repo-spec.md).")
 
 
 if __name__ == "__main__":

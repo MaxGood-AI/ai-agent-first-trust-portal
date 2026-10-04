@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Change History{% endblock %}
+
+{% block content %}
+<h1>Change History</h1>
+<p><a href="{{ url_for('admin.dashboard') }}">&larr; Back to Dashboard</a> &middot; <a href="{{ url_for('admin_git.governance') }}">Governance documents</a></p>
+<p>Commits that changed mapped paths of a git source, recorded as change-management records.</p>
+
+<form method="GET" class="inline-form">
+    <select name="source">
+        <option value="">All sources</option>
+        {% for sid, s in sources.items() %}
+        <option value="{{ sid }}" {% if sid == current_source %}selected{% endif %}>{{ s.name }}</option>
+        {% endfor %}
+    </select>
+    <button type="submit">Filter</button>
+</form>
+
+{% if pagination.items %}
+<table class="data-table">
+    <thead><tr><th>Committed</th><th>Source</th><th>Commit</th><th>Author</th><th>Message</th><th>Paths</th></tr></thead>
+    <tbody>
+        {% for c in pagination.items %}
+        <tr>
+            <td>{{ c.committed_at.strftime('%Y-%m-%d %H:%M') if c.committed_at else '' }}</td>
+            <td>{{ sources[c.source_id].name if c.source_id in sources else '' }}</td>
+            <td><code>{{ c.commit_id[:12] }}</code></td>
+            <td>{{ c.author_name or '' }}{% if c.author_email %}<br><span class="help-text">{{ c.author_email }}</span>{% endif %}</td>
+            <td><pre class="commit-message">{{ c.message }}</pre></td>
+            <td>{% for p in (c.paths or []) %}<code>{{ p }}</code><br>{% endfor %}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+<p>
+    {% if pagination.has_prev %}<a href="{{ url_for('admin_git.governance_changes', page=pagination.prev_num, source=current_source) }}">&larr; Newer</a>{% endif %}
+    {% if pagination.has_next %}<a href="{{ url_for('admin_git.governance_changes', page=pagination.next_num, source=current_source) }}">Older &rarr;</a>{% endif %}
+</p>
+{% else %}
+<p>No change records yet.</p>
+{% endif %}
+{% endblock %}

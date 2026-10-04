@@ -1,6 +1,6 @@
 """Compliance scoring and gap analysis engine."""
 
-from app.models import db, Control, TestRecord
+from app.models import Control, TestRecord
 
 
 def calculate_overall_score():

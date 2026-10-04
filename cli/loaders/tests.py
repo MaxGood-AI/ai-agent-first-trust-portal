@@ -1,14 +1,11 @@
 """Loader for tests.json → TestRecord model."""
 
-import logging
-
-from app.models import Control, TestRecord
-from cli.loaders.base import BaseLoader
-
-logger = logging.getLogger(__name__)
+from app.models import Control, System, TestRecord
+from cli.loaders.base import BaseLoader, SkipRecord
 
 
 class TestsLoader(BaseLoader):
+    dataset = "tests"
     model_class = TestRecord
     file_name = "tests.json"
 
@@ -38,7 +35,7 @@ class TestsLoader(BaseLoader):
 
     def _build_record(self, item):
         """Extract nested objects before standard build."""
-        item = dict(item)
+        item = self._with_owner(item)
 
         # Extract system.id → system_id
         for nested_key, fk_column in self.nested_fk_extractions.items():
@@ -46,24 +43,18 @@ class TestsLoader(BaseLoader):
             if isinstance(nested_obj, dict) and "id" in nested_obj:
                 item[fk_column] = nested_obj["id"]
 
-        # Extract owner.id/owner.name
-        owner = item.get("owner")
-        if isinstance(owner, dict):
-            item["owner_id"] = owner.get("id")
-            item["owner_name"] = owner.get("name")
-
         return super()._build_record(item)
 
-    def _validate(self, item, record):
-        """Ensure the referenced control exists."""
-        from app.models import db
-
+    def resolve_references(self, item, record, ctx):
+        """The control must exist; an unknown system is dropped with a warning."""
         control_id = record.get("control_id")
-        if control_id and db.session.get(Control, control_id) is None:
-            logger.warning(
-                "  Skipping test '%s': control_id '%s' not found",
-                item.get("name", "?"),
-                control_id,
-            )
-            return False
-        return True
+        if not control_id:
+            raise SkipRecord("control_id is missing")
+        if control_id not in ctx.ids(Control):
+            raise SkipRecord(f"control_id {control_id!r} not found")
+
+        system_id = record.get("system_id")
+        if system_id and system_id not in ctx.ids(System):
+            record["system_id"] = None
+            return [f"system_id {system_id!r} not found; stored without a system"]
+        return None

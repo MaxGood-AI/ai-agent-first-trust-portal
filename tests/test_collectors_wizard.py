@@ -21,6 +21,7 @@ from app.config import TestConfig
 from app.models import CollectorConfig, db
 from app.services import team_service
 from app.services.collector_status import COLLECTOR_CATALOG, get_overview
+from tests.conftest import login
 
 
 @pytest.fixture
@@ -50,8 +51,7 @@ def admin(app_ctx):
 
 
 def _login_admin(client, admin):
-    with client.session_transaction() as sess:
-        sess["api_key"] = admin.api_key
+    login(client, admin)
 
 
 def _save_config(name="aws", **overrides):
@@ -164,8 +164,7 @@ def test_wizard_welcome_renders(client, admin):
 
 def test_wizard_welcome_forbidden_for_non_admin(client, app_ctx):
     user = team_service.create_member("User", "u@example.com", "human")
-    with client.session_transaction() as sess:
-        sess["api_key"] = user.api_key
+    login(client, user)
     resp = client.get("/admin/setup/collectors", follow_redirects=False)
     assert resp.status_code in (302, 403)
 
@@ -259,7 +258,7 @@ def test_environment_endpoint_requires_admin(client, app_ctx):
     user = team_service.create_member("User", "u@example.com", "human")
     resp = client.get(
         "/api/collectors/environment",
-        headers={"X-API-Key": user.api_key},
+        headers={"X-API-Key": user.issued_api_key},
     )
     assert resp.status_code == 403
 
@@ -269,7 +268,7 @@ def test_environment_endpoint_returns_identity(client, admin):
     _login_admin(client, admin)
     resp = client.get(
         "/api/collectors/environment",
-        headers={"X-API-Key": admin.api_key},
+        headers={"X-API-Key": admin.issued_api_key},
     )
     assert resp.status_code == 200
     data = resp.get_json()
@@ -286,7 +285,7 @@ def test_compliance_journey_includes_collector_counts(client, admin):
     _login_admin(client, admin)
     resp = client.get(
         "/api/compliance-journey",
-        headers={"X-API-Key": admin.api_key},
+        headers={"X-API-Key": admin.issued_api_key},
     )
     assert resp.status_code == 200
     data = resp.get_json()
@@ -307,7 +306,7 @@ def test_compliance_journey_phase5_reflects_successful_run(client, admin):
     )
     resp = client.get(
         "/api/compliance-journey",
-        headers={"X-API-Key": admin.api_key},
+        headers={"X-API-Key": admin.issued_api_key},
     )
     data = resp.get_json()
     p5 = data["journey"]["phases"]["5_evidence_collection"]["checks"]

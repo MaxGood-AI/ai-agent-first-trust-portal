@@ -1,17 +1,16 @@
 """Loader for evidence/evidence-index.json → Evidence model."""
 
-import logging
 import uuid
+from datetime import datetime
 
 from app.models import Control, Evidence, TestRecord
-from cli.loaders.base import BaseLoader
-
-logger = logging.getLogger(__name__)
+from cli.loaders.base import BaseLoader, SkipRecord
 
 EVIDENCE_UUID_NAMESPACE = uuid.UUID("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
 
 
 class EvidenceLoader(BaseLoader):
+    dataset = "evidence"
     model_class = Evidence
     file_name = "evidence/evidence-index.json"
     field_map = {}
@@ -47,11 +46,10 @@ class EvidenceLoader(BaseLoader):
         return None
 
     def _build_record(self, item):
-        """Custom build: generate deterministic ID and resolve test_record_id."""
+        """Custom build: deterministic ID; test_record_id is resolved later."""
         columns = self._get_model_columns()
 
         test_name = item.get("test_name", "")
-        control_name = item.get("control_name")
         file_path = item.get("file_path", "")
         collected_at = item.get("collected_at", "")
 
@@ -61,17 +59,7 @@ class EvidenceLoader(BaseLoader):
             f"{test_name}|{file_path}|{collected_at}",
         ))
 
-        # Resolve FK
-        test_record_id = self._resolve_test_record_id(test_name, control_name)
-        if test_record_id is None:
-            logger.warning(
-                "  Skipping evidence: no match for test_name='%s'%s",
-                test_name,
-                f", control_name='{control_name}'" if control_name else "",
-            )
-            return None
-
-        record = {"id": det_id, "test_record_id": test_record_id}
+        record = {"id": det_id}
         other_data = {}
 
         for json_key, value in item.items():
@@ -88,7 +76,6 @@ class EvidenceLoader(BaseLoader):
                 # Parse datetime columns
                 col = self.model_class.__table__.columns.get(col_name)
                 if col is not None and hasattr(col.type, "python_type"):
-                    from datetime import datetime
                     try:
                         if col.type.python_type is datetime:
                             mapped_value = self._parse_date(mapped_value)
@@ -104,6 +91,19 @@ class EvidenceLoader(BaseLoader):
         record["other_data"] = other_data if other_data else {}
         return record
 
-    def _validate(self, item, record):
-        """Record is None when test_name couldn't be resolved — already logged."""
-        return record is not None
+    def resolve_references(self, item, record, ctx):
+        """Resolve test_name/control_name to test_record_id (cached per import)."""
+        test_name = item.get("test_name", "")
+        control_name = item.get("control_name")
+        if not isinstance(test_name, str) or not (control_name is None or isinstance(control_name, str)):
+            raise SkipRecord("test_name and control_name must be strings")
+        cache = ctx.cache.setdefault("evidence_test_record_ids", {})
+        key = (test_name, control_name)
+        if key not in cache:
+            cache[key] = self._resolve_test_record_id(test_name, control_name)
+        test_record_id = cache[key]
+        if test_record_id is None:
+            detail = f" or control_name={control_name!r}" if control_name else ""
+            raise SkipRecord(f"no test matches test_name={test_name!r}{detail}")
+        record["test_record_id"] = test_record_id
+        return None

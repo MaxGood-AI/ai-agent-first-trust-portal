@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}{{ record.path }}{% endblock %}
+
+{% block content %}
+<h1><code>{{ record.path }}</code></h1>
+<p><a href="{{ url_for('admin_git.governance') }}">&larr; Governance documents</a> &middot; source {{ source.name }} &middot; {{ record.kind | replace('_', ' ') }} &middot; status {{ record.status }}</p>
+
+{% if version %}
+<p>Version from commit <code>{{ version.commit_id }}</code>, SHA-256 <code>{{ version.sha256 }}</code>, {{ version.size }} bytes, synced {{ version.created_at.strftime('%Y-%m-%d %H:%M UTC') }}{% if version.id != record.current_version_id %} <strong>(not the current version)</strong>{% endif %}.</p>
+<div class="policy-content">
+    {% if rendered %}{{ rendered }}{% else %}<pre>{{ version.content }}</pre>{% endif %}
+</div>
+{% else %}
+<p>No stored version.</p>
+{% endif %}
+
+<h2>Versions</h2>
+<table class="data-table">
+    <thead><tr><th>Synced</th><th>Commit</th><th>SHA-256</th><th>Size</th></tr></thead>
+    <tbody>
+        {% for v in versions %}
+        <tr>
+            <td><a href="{{ url_for('admin_git.governance_file', file_id=record.id, version=v.id) }}">{{ v.created_at.strftime('%Y-%m-%d %H:%M') }}</a>{% if v.id == record.current_version_id %} (current){% endif %}</td>
+            <td><code>{{ v.commit_id[:12] }}</code></td>
+            <td><code>{{ v.sha256[:12] }}</code></td>
+            <td>{{ v.size }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

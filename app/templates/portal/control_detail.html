@@ -46,10 +46,10 @@
 <p>No tests defined for this control.</p>
 {% endif %}
 
-{% if control.policies %}
+{% if linked_policies %}
 <h2>Linked Policies</h2>
 <ul>
-    {% for policy in control.policies %}
+    {% for policy in linked_policies %}
     <li><a href="{{ url_for('portal.policy_detail', policy_id=policy.id) }}">{{ policy.title }}</a></li>
     {% endfor %}
 </ul>

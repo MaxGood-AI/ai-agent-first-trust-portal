@@ -1,6 +1,7 @@
 """Tests for governance document templates."""
 
 import os
+import re
 
 import pytest
 
@@ -13,8 +14,8 @@ REQUIRED_SECTIONS = [
     "## Platform Overview",
     "## Repository Map",
     "## Cross-Cutting Conventions",
-    "## KanbanZone Card Workflow",
-    "## KanbanZone Agent Access",
+    "## Work Item Workflow",
+    "## Task Board Access",
     "## Linting",
     "## Testing",
     "## Definition of Done",
@@ -87,6 +88,28 @@ def test_templates_no_maxgood_references():
         assert "maxgood" not in content, f"{filename} contains MaxGood-specific reference"
 
 
+TOOL_SPECIFIC_PATTERNS = [
+    r"kanban\s*zone",
+    r"kanban-zone",
+    r"kanbanzone",
+    r"KANBAN_?ZONE",
+    r"https?://[^\s)`]*/b/[A-Za-z0-9]+",
+]
+
+
+def _governance_files():
+    return sorted(name for name in os.listdir(TEMPLATES_DIR)
+                  if os.path.isfile(os.path.join(TEMPLATES_DIR, name)))
+
+
+@pytest.mark.parametrize("pattern", TOOL_SPECIFIC_PATTERNS)
+def test_governance_files_are_task_board_neutral(pattern):
+    files = _governance_files()
+    assert {"CLAUDE.md.template", "AGENTS.md.template", "GOVERNANCE-SETUP.md", "REVIEW-PROMPT.md"} <= set(files)
+    offenders = [name for name in files if re.search(pattern, _read_template(name), re.I)]
+    assert offenders == [], f"{pattern!r} found in {offenders}"
+
+
 def test_setup_guide_has_all_steps():
     content = _read_template("GOVERNANCE-SETUP.md")
     assert "## Step 1" in content
@@ -104,8 +127,8 @@ def test_review_prompt_exists():
 
 def test_review_prompt_has_placeholders():
     content = _read_template("REVIEW-PROMPT.md")
-    assert "{{ CARD_NUMBER }}" in content
-    assert "{{ BOARD_URL }}" in content
+    assert "{{ WORK_ITEM_ID }}" in content
+    assert "{{ WORK_ITEM_URL }}" in content
     assert "{{ REPO_LIST }}" in content
 
 

@@ -1,48 +1,67 @@
-"""Admin routes for managing compliance artifacts."""
+"""Admin routes for managing compliance artifacts.
+
+Sign-in forms (``/admin/login``, ``/admin/client-login``) consume one unit of
+the client's rate-limit budget per POST before the key is examined
+(``rate_limit.consume``, a single atomic upsert) and answer 429 once it is
+spent; a successful sign-in resets the budget. A client member additionally
+starts at most AUTH_RATE_LIMIT_ATTEMPTS sessions per window, counted per
+member (app.auth.consume_client_session); beyond it the sign-in answers 429.
+"""
 
 import uuid as _uuid
 from datetime import datetime, timezone
 
-from flask import Blueprint, render_template, request, redirect, url_for, flash, session, g, Response
+from flask import Blueprint, render_template, request, redirect, url_for, flash, g, Response
+from sqlalchemy.exc import IntegrityError
 
 from app.models import db, Control, System, Vendor, Policy, TestRecord, Evidence, RiskRegister, TeamMember
-from app.auth import require_api_key, require_admin, require_client_or_admin
-from app.services import team_service
+from app.auth import (
+    consume_client_session, drop_legacy_session_keys, login_session, logout_session, require_api_key,
+    require_admin, require_client_or_admin,
+)
+from app.routes.crud import column_errors
+from app.security import is_http_url, safe_next_url, url_fields_error
+from app.services import rate_limit, team_service
 
 admin_bp = Blueprint("admin", __name__)
 
 
 @admin_bp.route("/login", methods=["GET", "POST"])
 def login():
-    """Login page — paste API key to access admin."""
+    """Login page — paste an admin API key once; the session then carries only
+    the member id, a key fingerprint, the session epoch and the login time."""
+    next_url = safe_next_url(request.values.get("next"), url_for("admin.dashboard"))
     if request.method == "POST":
+        if not rate_limit.consume("login"):
+            return render_template("admin/login.html", error="Too many failed attempts. Try again later.",
+                                   next_url=next_url), 429
         api_key = request.form.get("api_key", "").strip()
         if not api_key:
-            return render_template("admin/login.html", error="Please enter an API key.")
+            return render_template("admin/login.html", error="Please enter an API key.", next_url=next_url)
 
-        member = TeamMember.query.filter_by(api_key=api_key, is_active=True).first()
-        if not member:
-            return render_template("admin/login.html", error="Invalid or inactive API key.")
+        member = team_service.find_by_api_key(api_key)
+        if not member or not member.is_compliance_admin or member.is_expired:
+            error = ("This account does not have admin access." if member and not member.is_compliance_admin
+                     else "Invalid or inactive API key.")
+            return render_template("admin/login.html", error=error, next_url=next_url), 401
 
-        if not member.is_compliance_admin:
-            return render_template("admin/login.html", error="This account does not have admin access.")
-
-        session["api_key"] = api_key
-        next_url = request.args.get("next", url_for("admin.dashboard"))
+        rate_limit.reset("login")
+        login_session(member)
         return redirect(next_url)
 
+    drop_legacy_session_keys()
     error = None
     if request.args.get("error") == "invalid":
         error = "Your session has expired. Please log in again."
     elif request.args.get("error") == "forbidden":
         error = "Admin access required."
-    return render_template("admin/login.html", error=error)
+    return render_template("admin/login.html", error=error, next_url=next_url)
 
 
-@admin_bp.route("/logout")
+@admin_bp.route("/logout", methods=["POST"])
 def logout():
-    """Clear session and redirect to login."""
-    session.pop("api_key", None)
+    """End the browser session and revoke every session of its member (see ``logout_session``)."""
+    logout_session()
     return redirect(url_for("admin.login"))
 
 
@@ -109,6 +128,11 @@ def evidence_upload():
 
     if not test_record_id or not description:
         flash("Test record and description are required.", "error")
+        return redirect(url_for("admin.evidence_management"))
+
+    url_error = url_fields_error("evidence", {"url": url})
+    if url_error:
+        flash(f"Evidence {url_error}.", "error")
         return redirect(url_for("admin.evidence_management"))
 
     test = db.session.get(TestRecord, test_record_id)
@@ -211,16 +235,19 @@ def create_team_member():
         company=company,
         expires_at=expires_at,
     )
-    flash(f"Created {member.name}. API key: {member.api_key}", "success")
-    return redirect(url_for("admin.team_management"))
+    return _render_issued_key(member, f"Created {member.name}.")
 
 
 @admin_bp.route("/team/<member_id>/deactivate", methods=["POST"])
 @require_api_key
 @require_admin
 def deactivate_team_member(member_id):
-    """Deactivate a team member."""
-    member = team_service.deactivate_member(member_id)
+    """Deactivate a team member; the last usable compliance admin is refused."""
+    try:
+        member = team_service.deactivate_member(member_id)
+    except team_service.LastAdminError as exc:
+        flash(str(exc), "error")
+        return redirect(url_for("admin.team_management"))
     if member:
         flash(f"Deactivated {member.name}.", "success")
     else:
@@ -234,11 +261,25 @@ def deactivate_team_member(member_id):
 def regenerate_team_member_key(member_id):
     """Generate a new API key for a team member."""
     member = team_service.regenerate_key(member_id)
-    if member:
-        flash(f"New API key for {member.name}: {member.api_key}", "success")
-    else:
+    if not member:
         flash("Team member not found.", "error")
-    return redirect(url_for("admin.team_management"))
+        return redirect(url_for("admin.team_management"))
+    return _render_issued_key(member, f"Issued a new API key for {member.name}; the previous key no longer works.")
+
+
+def _render_issued_key(member, message):
+    """Show a newly issued key exactly once, in the response body only.
+
+    The key is never flashed: flashed messages travel in the session cookie.
+    """
+    members = team_service.list_members(include_inactive=True)
+    return render_template(
+        "admin/team_members.html",
+        members=members,
+        issued_member=member,
+        issued_key=member.issued_api_key,
+        issued_message=message,
+    )
 
 
 # --- Admin CRUD for core entities ---
@@ -275,10 +316,20 @@ def _admin_entity_create(model_class, redirect_endpoint, required_fields):
             flash(f"Missing required field: {field}", "error")
             return redirect(url_for(redirect_endpoint))
 
+    error = url_fields_error(model_class.__tablename__, data) or column_errors(model_class, data)
+    if error:
+        flash(f"Not saved: {error}.", "error")
+        return redirect(url_for(redirect_endpoint))
+
     data["id"] = str(uuid.uuid4())
     instance = model_class(**data)
     db.session.add(instance)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        flash("Not saved: the values conflict with existing data or a required field is missing.", "error")
+        return redirect(url_for(redirect_endpoint))
     flash(f"Created: {data.get('name', data.get('title', data['id']))}", "success")
     return redirect(url_for(redirect_endpoint))
 
@@ -420,16 +471,21 @@ def admin_audit_log():
     if action_filter:
         query = query.filter_by(action=action_filter.upper())
 
-    page = int(request.args.get("page", 1))
+    try:
+        page = max(1, int(request.args.get("page", 1)))
+    except ValueError:
+        page = 1
     per_page = 50
-    pagination = query.order_by(AuditLog.changed_at.desc()).paginate(
+    pagination = query.order_by(AuditLog.id.desc()).paginate(
         page=page, per_page=per_page, error_out=False
     )
 
     audited_tables = [
         "controls", "test_records", "policies", "evidence",
         "systems", "vendors", "risk_register", "pentest_findings",
-        "team_members",
+        "team_members", "portal_settings", "collector_config", "collector_run",
+        "collector_check_result", "decision_log_sessions",
+        "git_sources", "git_source_files", "git_file_versions", "git_commits", "git_sync_runs",
     ]
 
     # Resolve changed_by UUIDs to member names
@@ -455,15 +511,22 @@ def admin_audit_log():
 @require_api_key
 @require_admin
 def admin_settings():
-    from app.services.settings_service import get_portal_settings, SOC2_STAGES
+    from app.services.settings_service import get_portal_settings, PUBLIC_SECTIONS, SOC2_STAGES
     settings = get_portal_settings()
-    return render_template("admin/settings.html", settings=settings, soc2_stages=SOC2_STAGES)
+    return render_template("admin/settings.html", settings=settings, soc2_stages=SOC2_STAGES,
+                           public_sections=PUBLIC_SECTIONS)
 
 
 @admin_bp.route("/settings", methods=["POST"])
 @require_api_key
 @require_admin
 def admin_settings_update():
+    """Save Admin > Portal Settings.
+
+    The public-sections checkboxes are applied only when the form carries its
+    ``public_sections_form`` marker, so an unchecked set (every section
+    private) is distinguishable from a form without that fieldset.
+    """
     from app.services.settings_service import update_portal_settings
     data = {
         "company_legal_name": request.form.get("company_legal_name") or None,
@@ -480,7 +543,17 @@ def admin_settings_update():
         "legal_external_url": request.form.get("legal_external_url") or None,
         "ai_transparency_md": request.form.get("ai_transparency_md") or None,
     }
-    update_portal_settings(data, updated_by=g.current_team_member.id)
+    if "public_sections_form" in request.form:
+        data["public_sections"] = request.form.getlist("public_sections")
+    for field in ("legal_external_url", "website_url"):
+        if data[field] and not is_http_url(data[field]):
+            flash(f"{field.replace('_', ' ').capitalize()} must be an http(s) URL.", "error")
+            return redirect(url_for("admin.admin_settings"))
+    try:
+        update_portal_settings(data, updated_by=g.current_team_member.id)
+    except ValueError as exc:
+        flash(f"Not saved: {exc}.", "error")
+        return redirect(url_for("admin.admin_settings"))
     flash("Settings updated successfully.", "success")
     return redirect(url_for("admin.admin_settings"))
 
@@ -488,25 +561,45 @@ def admin_settings_update():
 # --- Client access (#651) ---
 
 
+CLIENT_LOGIN_ERRORS = {
+    "expired": "Your access has expired. Contact the organization for renewal.",
+    "forbidden": "Your access key does not grant access to that page.",
+}
+
+
 @admin_bp.route("/client-login", methods=["GET", "POST"])
 def client_login():
-    """Client login page — paste API key to access compliance report."""
+    """Client login page — paste an access key to view the compliance report.
+
+    ``?error=`` selects one of the fixed ``CLIENT_LOGIN_ERRORS`` messages; any
+    other value is ignored.
+    """
     if request.method == "GET":
+        drop_legacy_session_keys()
         return render_template("admin/client_login.html",
-                               error=request.args.get("error"))
+                               error=CLIENT_LOGIN_ERRORS.get(request.args.get("error", "")))
+
+    if not rate_limit.consume("client_login"):
+        return render_template("admin/client_login.html",
+                               error="Too many failed attempts. Try again later."), 429
 
     api_key = request.form.get("api_key", "").strip()
-    member = TeamMember.query.filter_by(api_key=api_key, is_active=True).first()
+    member = team_service.find_by_api_key(api_key)
 
     if not member or member.role != "client":
         return render_template("admin/client_login.html",
-                               error="Invalid access key")
+                               error="Invalid access key"), 401
 
     if member.is_expired:
         return render_template("admin/client_login.html",
-                               error="Your access has expired. Contact the organization for renewal.")
+                               error="Your access has expired. Contact the organization for renewal."), 401
 
-    session["api_key"] = api_key
+    if not consume_client_session(member):
+        return render_template("admin/client_login.html",
+                               error="Too many sign-ins with this access key. Try again later."), 429
+
+    rate_limit.reset("client_login")
+    login_session(member)
     return redirect(url_for("admin.client_report"))
 
 
@@ -628,29 +721,24 @@ _COLLECTOR_CATALOG = {
 def collectors_list():
     """Admin list of all collectors (configured + unconfigured)."""
     from app.models.collector_config import CollectorConfig
-    from app.services import collector_scheduler
+    from app.services import scheduler
 
     configs = {c.name: c for c in CollectorConfig.query.all()}
-    jobs_by_config_id = {}
-    for job in collector_scheduler.list_scheduled_jobs():
-        if job["id"].startswith("collector-"):
-            jobs_by_config_id[job["id"][len("collector-"):]] = job
-
     rows = []
     for name, meta in _COLLECTOR_CATALOG.items():
         config = configs.get(name)
-        scheduled_job = jobs_by_config_id.get(config.id) if config else None
+        upcoming = scheduler.next_run_time(config.schedule_cron) if config and config.enabled else None
         rows.append({
             "name": name,
             "label": meta["label"],
             "description": meta["description"],
             "config": config,
-            "next_run_time": scheduled_job["next_run_time"] if scheduled_job else None,
+            "next_run_time": upcoming.isoformat() if upcoming else None,
         })
     return render_template(
         "admin/collectors_list.html",
         rows=rows,
-        scheduler_running=collector_scheduler.is_running(),
+        scheduler_running=scheduler.leader_active(),
     )
 
 
@@ -747,12 +835,17 @@ def collector_configure_submit(name):
     if name == "platform":
         services_raw = (request.form.get("services_json") or "").strip()
         if services_raw:
+            from werkzeug.exceptions import HTTPException
+
+            from app.request_limits import loads_limited
             try:
-                import json
-                services = json.loads(services_raw)
+                services = loads_limited(services_raw)
                 if not isinstance(services, list):
                     raise ValueError("services must be a JSON array")
                 parsed_overrides["services"] = services
+            except HTTPException as exc:
+                flash(f"Services JSON invalid: {exc.description}", "error")
+                return redirect(url_for("admin.collector_configure_form", name=name))
             except (ValueError, TypeError) as exc:
                 flash(f"Services JSON invalid: {exc}", "error")
                 return redirect(url_for("admin.collector_configure_form", name=name))
@@ -782,7 +875,13 @@ def collector_configure_submit(name):
         db.session.add(config)
 
     config.credential_mode = credential_mode
-    config.schedule_cron = (request.form.get("schedule_cron") or "").strip() or None
+    schedule_cron = (request.form.get("schedule_cron") or "").strip() or None
+    from app.services.scheduler import parse_cron
+    if schedule_cron and parse_cron(schedule_cron) is None:
+        db.session.rollback()
+        flash(f"Invalid cron expression: {schedule_cron}", "error")
+        return redirect(url_for("admin.collector_configure_form", name=name))
+    config.schedule_cron = schedule_cron
     config.enabled = request.form.get("enabled") == "on"
 
     existing_config = dict(config.config or {})
@@ -844,17 +943,7 @@ def collector_configure_submit(name):
 
     db.session.commit()
 
-    # Keep the scheduler in sync with the persisted config.
-    from app.services import collector_scheduler
-    try:
-        collector_scheduler.sync_schedule_for(config)
-    except Exception as exc:  # noqa: BLE001
-        # Scheduler sync failures shouldn't block the save — log and continue.
-        import logging
-        logging.getLogger(__name__).exception(
-            "Failed to sync scheduler for collector %s: %s", name, exc
-        )
-
+    # The scheduler leader re-reads schedules every 30 seconds; nothing to sync here.
     flash(f"Saved {name} collector configuration.", "success")
 
     return_to = _safe_return_to(request.form.get("return_to"))

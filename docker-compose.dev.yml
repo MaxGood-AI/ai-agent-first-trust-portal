@@ -1,26 +1,33 @@
+# Development stack: live-reloading portal on http://localhost:5100 plus PostgreSQL.
+# The repository is mounted at /app; an evidence-repository checkout can be mounted
+# at /data (COMPLIANCE_DATA_DIR) and added as a local-directory git source, the only
+# directory local sources may read (LOCAL_SOURCE_ROOTS=/data).
 services:
   trust-portal:
-    build: .
+    build:
+      context: .
+      target: test
     container_name: trust-portal-dev
     ports:
       - "5100:5100"
     volumes:
       - .:/app
-      - ${COMPLIANCE_DATA_DIR:-.}:/data
+      - ${COMPLIANCE_DATA_DIR:-.}:/data:ro
     env_file:
       - .env
     environment:
-      - FLASK_ENV=development
+      - PORTAL_ENV=development
       - DATABASE_URL=postgresql://trust_portal:password@db:5432/trust_portal
+      - LOCAL_SOURCE_ROOTS=/data
     depends_on:
       db:
         condition: service_healthy
     command: >
-      bash -c "alembic upgrade head &&
-               flask run --host=0.0.0.0 --port=5100 --reload"
+      sh -c "python -m cli db-migrate &&
+             exec gunicorn -c gunicorn.conf.py --reload app.wsgi:app"
 
   db:
-    image: postgres:17
+    image: public.ecr.aws/docker/library/postgres:17
     container_name: trust-portal-db
     environment:
       POSTGRES_DB: trust_portal

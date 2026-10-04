@@ -4,22 +4,29 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Trust Portal{% endblock %} — {{ portal.company_brand_name }}</title>
+    {% if session.get("member_id") %}<meta name="csrf-token" content="{{ csrf_token() }}">{% endif %}
     <link rel="stylesheet" href="{{ url_for('static', filename='css/portal.css') }}">
+    <script src="{{ url_for('static', filename='js/portal.js') }}" defer></script>
     {% block head %}{% endblock %}
 </head>
 <body>
     <header>
         <nav>
+            {% set sections = portal.public_sections %}
+            {% if "overview" in sections %}
             <a href="{{ url_for('portal.index') }}" class="brand">{{ portal.company_brand_name }} Trust Portal</a>
+            {% else %}
+            <span class="brand">{{ portal.company_brand_name }} Trust Portal</span>
+            {% endif %}
             <ul>
-                <li><a href="{{ url_for('portal.index') }}">Overview</a></li>
-                <li><a href="{{ url_for('portal.controls') }}">Controls</a></li>
-                <li><a href="{{ url_for('portal.policies') }}">Policies</a></li>
-                <li><a href="{{ url_for('portal.systems') }}">Systems</a></li>
-                <li><a href="{{ url_for('portal.vendors') }}">Vendors</a></li>
-                <li><a href="{{ url_for('portal.risks') }}">Risks</a></li>
-                <li><a href="{{ url_for('portal.status') }}">Status</a></li>
-                <li><a href="{{ url_for('portal.ai_transparency') }}">AI Transparency</a></li>
+                {% if "overview" in sections %}<li><a href="{{ url_for('portal.index') }}">Overview</a></li>{% endif %}
+                {% if "controls" in sections %}<li><a href="{{ url_for('portal.controls') }}">Controls</a></li>{% endif %}
+                {% if "policies" in sections %}<li><a href="{{ url_for('portal.policies') }}">Policies</a></li>{% endif %}
+                {% if "systems" in sections %}<li><a href="{{ url_for('portal.systems') }}">Systems</a></li>{% endif %}
+                {% if "vendors" in sections %}<li><a href="{{ url_for('portal.vendors') }}">Vendors</a></li>{% endif %}
+                {% if "risks" in sections %}<li><a href="{{ url_for('portal.risks') }}">Risks</a></li>{% endif %}
+                {% if "status" in sections %}<li><a href="{{ url_for('portal.status') }}">Status</a></li>{% endif %}
+                {% if "ai_transparency" in sections %}<li><a href="{{ url_for('portal.ai_transparency') }}">AI Transparency</a></li>{% endif %}
             </ul>
         </nav>
     </header>
@@ -33,9 +40,11 @@
         {% endif %}
         <p><a href="mailto:{{ portal.contact_email }}">{{ portal.contact_email }}</a></p>
         {% if portal.website_url %}
-        <p><a href="{{ portal.website_url }}" target="_blank">{{ portal.website_url }}</a></p>
+        <p><a href="{{ portal.website_url|safe_url }}" target="_blank" rel="noopener noreferrer">{{ portal.website_url }}</a></p>
         {% endif %}
+        {% if "legal" in portal.public_sections %}
         <p><a href="{{ url_for('portal.legal') }}">Privacy Policy &middot; Terms of Use &middot; Accessibility</a></p>
+        {% endif %}
     </footer>
     {% block scripts %}{% endblock %}
 </body>

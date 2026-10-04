@@ -111,13 +111,13 @@ def test_footer_shows_company_info(app_ctx, client):
 # --- #646: Admin settings page tests ---
 
 def test_admin_settings_page_requires_admin(client, member):
-    resp = client.get("/admin/settings", headers={"X-API-Key": member.api_key})
+    resp = client.get("/admin/settings", headers={"X-API-Key": member.issued_api_key})
     assert resp.status_code == 403
 
 
 def test_admin_settings_page_renders(client, admin_member):
     resp = client.get("/admin/settings",
-                      headers={"X-API-Key": admin_member.api_key})
+                      headers={"X-API-Key": admin_member.issued_api_key})
     assert resp.status_code == 200
     assert b"Portal Settings" in resp.data
     assert b"company_legal_name" in resp.data
@@ -125,7 +125,7 @@ def test_admin_settings_page_renders(client, admin_member):
 
 def test_admin_settings_update(app_ctx, client, admin_member):
     resp = client.post("/admin/settings",
-                       headers={"X-API-Key": admin_member.api_key},
+                       headers={"X-API-Key": admin_member.issued_api_key},
                        data={"company_legal_name": "Updated Corp",
                              "company_brand_name": "Updated Brand"})
     assert resp.status_code == 302  # redirect after save
@@ -138,7 +138,7 @@ def test_admin_settings_update(app_ctx, client, admin_member):
 # --- #646: Settings API tests ---
 
 def test_settings_api_get(client, member):
-    resp = client.get("/api/settings", headers={"X-API-Key": member.api_key})
+    resp = client.get("/api/settings", headers={"X-API-Key": member.issued_api_key})
     assert resp.status_code == 200
     data = resp.get_json()
     assert "company_legal_name" in data
@@ -147,14 +147,14 @@ def test_settings_api_get(client, member):
 
 def test_settings_api_update_requires_admin(client, member):
     resp = client.put("/api/settings",
-                      headers={"X-API-Key": member.api_key},
+                      headers={"X-API-Key": member.issued_api_key},
                       json={"company_legal_name": "No Access"})
     assert resp.status_code == 403
 
 
 def test_settings_api_update(app_ctx, client, admin_member):
     resp = client.put("/api/settings",
-                      headers={"X-API-Key": admin_member.api_key},
+                      headers={"X-API-Key": admin_member.issued_api_key},
                       json={"company_legal_name": "API Corp"})
     assert resp.status_code == 200
     data = resp.get_json()
@@ -209,7 +209,7 @@ def test_soc2_journey_renders_on_home_page(app_ctx, client):
 
 def test_admin_settings_update_soc2_stage(app_ctx, client, admin_member):
     resp = client.post("/admin/settings",
-                       headers={"X-API-Key": admin_member.api_key},
+                       headers={"X-API-Key": admin_member.issued_api_key},
                        data={"soc2_current_stage": "auditor_engaged",
                              "type_1_date": "2026-07-01"})
     assert resp.status_code == 302
@@ -221,7 +221,7 @@ def test_admin_settings_update_soc2_stage(app_ctx, client, admin_member):
 
 
 def test_settings_api_includes_soc2_stages(client, member):
-    resp = client.get("/api/settings", headers={"X-API-Key": member.api_key})
+    resp = client.get("/api/settings", headers={"X-API-Key": member.issued_api_key})
     data = resp.get_json()
     assert "soc2_current_stage" in data
     assert "soc2_stages" in data
@@ -293,7 +293,7 @@ def test_navigation_has_ai_transparency_link(client):
 
 def test_admin_can_update_legal_and_ai_content(app_ctx, client, admin_member):
     resp = client.post("/admin/settings",
-                       headers={"X-API-Key": admin_member.api_key},
+                       headers={"X-API-Key": admin_member.issued_api_key},
                        data={
                            "legal_content_md": "# My Legal",
                            "ai_transparency_md": "# My AI",

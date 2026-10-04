@@ -1,0 +1,61 @@
+{
+  "status": "intact_with_forks",
+  "forks": 1,
+  "verified": 12,
+  "unhashed_entries": 2,
+  "true_breaks": 0,
+  "entries": 14,
+  "chain_id": "a1a678201d1dd7af",
+  "final_row_id": 14,
+  "final_row_hash": "b4c10ded2d648865b7107ba9b9c6af0d46ce1eb0ae7b23f6db9df0beab691baa",
+  "hashed_rows": [
+    {
+      "id": 3,
+      "row_hash": "a1a678201d1dd7af6b08dd3108a24e2589a5349f34259906e3b88e893435d7de"
+    },
+    {
+      "id": 4,
+      "row_hash": "7de8eff91abb13f19ba9f24219c03b896aabfad9de690e069351b6f4e987e73c"
+    },
+    {
+      "id": 5,
+      "row_hash": "5f152146f0d76ed46f7a0771a731872de53d41779f03278cbbae9b52ead3a56d"
+    },
+    {
+      "id": 6,
+      "row_hash": "faa05f31f6c7296a6cb43479d09c0db0c8e0b5ef6129ec37f4db7c4040a1aa6a"
+    },
+    {
+      "id": 7,
+      "row_hash": "230ab50fcf2e26bfe99780edfaad2442940395b95ce1a79e5fa9f04d31e378b1"
+    },
+    {
+      "id": 8,
+      "row_hash": "ec5247aae5dc49aa283f0d8746593c34c68d5a32040487be743963438a03ef2c"
+    },
+    {
+      "id": 9,
+      "row_hash": "3c81a0b9dcf55a1ce55a2b45c5b94ba95fd9ca6511cbbd645bc77cc3b95b4943"
+    },
+    {
+      "id": 10,
+      "row_hash": "dd816bb0b0deb01347dc0e6ca6d69c00944900ec8d1a6646fc63efee595ead9c"
+    },
+    {
+      "id": 11,
+      "row_hash": "22bf53a55d4fa5d14d789c832e8ac29b4a8f1ef36dcf0a4dbd4f23041362e345"
+    },
+    {
+      "id": 12,
+      "row_hash": "ebf4043c938cc4628f72628dc3c6ffd0d0050a0f5d11932baa6240b9621e57a4"
+    },
+    {
+      "id": 13,
+      "row_hash": "9778655ca0d76cc2e2285cc345b62151f722b6613427a94ffb4668ecb516ac40"
+    },
+    {
+      "id": 14,
+      "row_hash": "b4c10ded2d648865b7107ba9b9c6af0d46ce1eb0ae7b23f6db9df0beab691baa"
+    }
+  ]
+}

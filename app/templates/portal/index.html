@@ -52,7 +52,9 @@
 <section class="ai-transparency-banner">
     <h2>AI-Driven Compliance</h2>
     <p>We use AI agents as formal participants in our compliance process, with full governance, human oversight, and traceable evidence chains.</p>
+    {% if "ai_transparency" in portal.public_sections %}
     <p><a href="{{ url_for('portal.ai_transparency') }}">Learn About Our Approach</a></p>
+    {% endif %}
 </section>
 
 <section class="client-access" style="text-align: center; padding: 2rem; background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius); margin: 2rem 0;">

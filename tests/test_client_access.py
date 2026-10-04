@@ -56,7 +56,7 @@ def test_client_login_page_renders(client):
 
 def test_client_login_valid_key(client, client_member):
     resp = client.post("/admin/client-login",
-                       data={"api_key": client_member.api_key})
+                       data={"api_key": client_member.issued_api_key})
     assert resp.status_code == 302
     assert "/admin/report" in resp.headers["Location"]
 
@@ -64,21 +64,21 @@ def test_client_login_valid_key(client, client_member):
 def test_client_login_invalid_key(client):
     resp = client.post("/admin/client-login",
                        data={"api_key": "bogus-key-12345"})
-    assert resp.status_code == 200
+    assert resp.status_code == 401
     assert b"Invalid access key" in resp.data
 
 
 def test_client_login_expired_key(client, expired_client):
     resp = client.post("/admin/client-login",
-                       data={"api_key": expired_client.api_key})
-    assert resp.status_code == 200
+                       data={"api_key": expired_client.issued_api_key})
+    assert resp.status_code == 401
     assert b"expired" in resp.data.lower()
 
 
 def test_client_login_non_client_role_rejected(client, admin_member):
     resp = client.post("/admin/client-login",
-                       data={"api_key": admin_member.api_key})
-    assert resp.status_code == 200
+                       data={"api_key": admin_member.issued_api_key})
+    assert resp.status_code == 401
     assert b"Invalid access key" in resp.data
 
 
@@ -92,7 +92,7 @@ def test_client_report_requires_auth(client):
 
 def test_client_report_renders_for_client(client, client_member):
     resp = client.get("/admin/report",
-                      headers={"X-API-Key": client_member.api_key})
+                      headers={"X-API-Key": client_member.issued_api_key})
     assert resp.status_code == 200
     assert b"Compliance Report" in resp.data
     assert b"Compliance Score" in resp.data
@@ -100,14 +100,14 @@ def test_client_report_renders_for_client(client, client_member):
 
 def test_client_report_renders_for_admin(client, admin_member):
     resp = client.get("/admin/report",
-                      headers={"X-API-Key": admin_member.api_key})
+                      headers={"X-API-Key": admin_member.issued_api_key})
     assert resp.status_code == 200
     assert b"Compliance Report" in resp.data
 
 
 def test_client_cannot_access_admin_dashboard(client, client_member):
     resp = client.get("/admin/",
-                      headers={"X-API-Key": client_member.api_key})
+                      headers={"X-API-Key": client_member.issued_api_key})
     assert resp.status_code == 403
 
 
@@ -153,10 +153,10 @@ def test_is_expired_property(app_ctx):
 
 def test_expired_key_rejected_by_require_api_key(client, expired_client):
     resp = client.get("/api/health",
-                      headers={"X-API-Key": expired_client.api_key})
+                      headers={"X-API-Key": expired_client.issued_api_key})
     # Health endpoint doesn't require auth, so let's use an authed endpoint
     resp = client.get("/api/compliance-score",
-                      headers={"X-API-Key": expired_client.api_key})
+                      headers={"X-API-Key": expired_client.issued_api_key})
     assert resp.status_code == 401
 
 
@@ -190,7 +190,7 @@ def test_client_report_shows_all_evidence_gaps(app_ctx, client, admin_member):
         db.session.commit()
 
     resp = client.get("/admin/report",
-                      headers={"X-API-Key": admin_member.api_key})
+                      headers={"X-API-Key": admin_member.issued_api_key})
     assert resp.status_code == 200
     # All 30 should appear — no "and X more" truncation
     assert b"and " not in resp.data or b"... and" not in resp.data
@@ -218,7 +218,7 @@ def test_client_report_pentest_summary_uses_latest_scan_only(app_ctx, client, ad
         db.session.commit()
 
     resp = client.get("/admin/report",
-                      headers={"X-API-Key": admin_member.api_key})
+                      headers={"X-API-Key": admin_member.issued_api_key})
     assert resp.status_code == 200
     # Should show CRITICAL count of 2 from latest scan
     assert b"CRITICAL" in resp.data
@@ -232,7 +232,7 @@ def test_client_report_pentest_summary_uses_latest_scan_only(app_ctx, client, ad
 def test_client_report_pentest_summary_empty_when_no_findings(app_ctx, client, admin_member):
     """Report handles no pentest findings gracefully."""
     resp = client.get("/admin/report",
-                      headers={"X-API-Key": admin_member.api_key})
+                      headers={"X-API-Key": admin_member.issued_api_key})
     assert resp.status_code == 200
     # No Security Assessment Summary section when no findings
     assert b"Security Assessment Summary" not in resp.data
@@ -246,7 +246,7 @@ def test_client_report_contains_all_sections(app_ctx, client, admin_member):
         db.session.commit()
 
     resp = client.get("/admin/report",
-                      headers={"X-API-Key": admin_member.api_key})
+                      headers={"X-API-Key": admin_member.issued_api_key})
     assert resp.status_code == 200
     assert b"Compliance Score" in resp.data
     assert b"Controls" in resp.data
@@ -258,7 +258,7 @@ def test_client_report_contains_all_sections(app_ctx, client, admin_member):
 def test_client_report_shows_confidential_label(client, admin_member):
     """Report page must show 'Confidential' label."""
     resp = client.get("/admin/report",
-                      headers={"X-API-Key": admin_member.api_key})
+                      headers={"X-API-Key": admin_member.issued_api_key})
     assert b"Confidential" in resp.data
 
 
@@ -268,34 +268,34 @@ def test_deactivated_client_cannot_login(app_ctx, client, client_member):
         team_service.deactivate_member(client_member.id)
 
     resp = client.post("/admin/client-login",
-                       data={"api_key": client_member.api_key})
-    assert resp.status_code == 200
+                       data={"api_key": client_member.issued_api_key})
+    assert resp.status_code == 401
     assert b"Invalid access key" in resp.data
 
 
 def test_client_login_empty_key(client):
     """Empty API key should show error."""
     resp = client.post("/admin/client-login", data={"api_key": ""})
-    assert resp.status_code == 200
+    assert resp.status_code == 401
     assert b"Invalid access key" in resp.data
 
 
 def test_client_cannot_access_settings(client, client_member):
     """Client role must not be able to access admin settings."""
     resp = client.get("/admin/settings",
-                      headers={"X-API-Key": client_member.api_key})
+                      headers={"X-API-Key": client_member.issued_api_key})
     assert resp.status_code == 403
 
 
 def test_client_cannot_access_audit_log(client, client_member):
     """Client role must not be able to access audit log."""
     resp = client.get("/admin/audit-log",
-                      headers={"X-API-Key": client_member.api_key})
+                      headers={"X-API-Key": client_member.issued_api_key})
     assert resp.status_code == 403
 
 
 def test_client_cannot_access_team_management(client, client_member):
     """Client role must not be able to manage team members."""
     resp = client.get("/admin/team",
-                      headers={"X-API-Key": client_member.api_key})
+                      headers={"X-API-Key": client_member.issued_api_key})
     assert resp.status_code == 403

@@ -1,0 +1,402 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Optional CI/CD for the AI-agent-first trust portal: source (GitHub through
+  CodeConnections, or CodeCommit) -> build (cfn-lint, unit suite, image to ECR)
+  -> manual approval -> deploy (deploy/aws/deploy.sh) to the core stack built
+  from deploy/aws/trust-portal.yaml. Reads the core stack's exports.
+  Runbook: deploy/README.md.
+
+Parameters:
+  CoreStackName:
+    Type: String
+    AllowedPattern: '^[A-Za-z][A-Za-z0-9-]{0,127}$'
+    Description: Name of the core stack (deploy/aws/trust-portal.yaml, with ImageSource ecr) this pipeline builds and deploys.
+  PipelineSource:
+    Type: String
+    Default: github
+    AllowedValues: [github, codecommit]
+  SourceRepository:
+    Type: String
+    AllowedPattern: '^[\w.-]+(/[\w.-]+)?$'
+    Description: owner/repo on GitHub, or the CodeCommit repository name.
+  SourceBranch:
+    Type: String
+    Default: main
+  WitnessArmed:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Every deploy passes an explicit witness flag - false deploys with deploy.sh --no-witness, true with --witness. Set true only after cutover armed the witness.
+  LogRetentionDays:
+    Type: Number
+    Default: 30
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653]
+
+Conditions:
+  FromGitHub: !Equals [!Ref PipelineSource, github]
+  FromCodeCommit: !Equals [!Ref PipelineSource, codecommit]
+
+Resources:
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub
+        - ${O}-${A}-cicd-${E}-${AWS::AccountId}-${AWS::Region}
+        - {O: {'Fn::ImportValue': !Sub '${CoreStackName}-OrgPrefix'}, A: {'Fn::ImportValue': !Sub '${CoreStackName}-AppName'}, E: {'Fn::ImportValue': !Sub '${CoreStackName}-EnvironmentName'}}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules: [{ObjectOwnership: BucketOwnerEnforced}]
+      LifecycleConfiguration:
+        Rules: [{Id: ExpireAfter30Days, Status: Enabled, ExpirationInDays: 30}]
+
+  ArtifactBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ArtifactBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource: [!GetAtt ArtifactBucket.Arn, !Sub '${ArtifactBucket.Arn}/*']
+            Condition: {Bool: {'aws:SecureTransport': 'false'}}
+
+  Connection:
+    Type: AWS::CodeConnections::Connection
+    Condition: FromGitHub
+    Properties:
+      ConnectionName: !Sub
+        - ${O}-${A}-${E}
+        - {O: {'Fn::ImportValue': !Sub '${CoreStackName}-OrgPrefix'}, A: {'Fn::ImportValue': !Sub '${CoreStackName}-AppName'}, E: {'Fn::ImportValue': !Sub '${CoreStackName}-EnvironmentName'}}
+      ProviderType: GitHub
+
+  BuildLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub
+        - /aws/codebuild/${O}-${A}-build-${E}
+        - {O: {'Fn::ImportValue': !Sub '${CoreStackName}-OrgPrefix'}, A: {'Fn::ImportValue': !Sub '${CoreStackName}-AppName'}, E: {'Fn::ImportValue': !Sub '${CoreStackName}-EnvironmentName'}}
+      RetentionInDays: !Ref LogRetentionDays
+
+  BuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub
+        - ${O}-codebuild-${A}-build-${E}
+        - {O: {'Fn::ImportValue': !Sub '${CoreStackName}-OrgPrefix'}, A: {'Fn::ImportValue': !Sub '${CoreStackName}-AppName'}, E: {'Fn::ImportValue': !Sub '${CoreStackName}-EnvironmentName'}}
+      Path: /
+      Description: !Sub Trust portal build - lint, unit tests and image push (deploy/aws/trust-portal-pipeline.yaml, stack ${AWS::StackName}).
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: TrustCodeBuild
+            Effect: Allow
+            Principal: {Service: codebuild.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: {'aws:SourceAccount': !Ref 'AWS::AccountId'}
+              ArnEquals:
+                'aws:SourceArn': !Sub
+                  - arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:project/${O}-${A}-build-${E}
+                  - {O: {'Fn::ImportValue': !Sub '${CoreStackName}-OrgPrefix'}, A: {'Fn::ImportValue': !Sub '${CoreStackName}-AppName'}, E: {'Fn::ImportValue': !Sub '${CoreStackName}-EnvironmentName'}}
+      Policies:
+        - PolicyName: !Sub
+            - ${O}-codebuild-${A}-build-${E}
+            - {O: {'Fn::ImportValue': !Sub '${CoreStackName}-OrgPrefix'}, A: {'Fn::ImportValue': !Sub '${CoreStackName}-AppName'}, E: {'Fn::ImportValue': !Sub '${CoreStackName}-EnvironmentName'}}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: EcrToken
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+              - Sid: EcrPush
+                Effect: Allow
+                Action: ['ecr:BatchCheckLayerAvailability', 'ecr:BatchGetImage', 'ecr:CompleteLayerUpload', 'ecr:DescribeImages', 'ecr:GetDownloadUrlForLayer', 'ecr:InitiateLayerUpload', 'ecr:PutImage', 'ecr:UploadLayerPart']
+                Resource: {'Fn::ImportValue': !Sub '${CoreStackName}-ImageRepositoryArn'}
+              - Sid: PipelineArtifacts
+                Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub '${ArtifactBucket.Arn}/*'
+              - Sid: BuildLogs
+                Effect: Allow
+                Action: ['logs:CreateLogStream', 'logs:PutLogEvents']
+                Resource: !GetAtt BuildLogGroup.Arn
+
+  BuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub
+        - ${O}-${A}-build-${E}
+        - {O: {'Fn::ImportValue': !Sub '${CoreStackName}-OrgPrefix'}, A: {'Fn::ImportValue': !Sub '${CoreStackName}-AppName'}, E: {'Fn::ImportValue': !Sub '${CoreStackName}-EnvironmentName'}}
+      Description: Lints the templates, runs the unit suite, builds the production image and pushes it to ECR.
+      ServiceRole: !GetAtt BuildRole.Arn
+      Source: {Type: CODEPIPELINE, BuildSpec: deploy/aws/buildspec-build.yml}
+      Artifacts: {Type: CODEPIPELINE}
+      TimeoutInMinutes: 30
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:7.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - {Name: IMAGE_REPOSITORY_URI, Value: {'Fn::ImportValue': !Sub '${CoreStackName}-ImageRepositoryUri'}}
+      LogsConfig:
+        CloudWatchLogs: {Status: ENABLED, GroupName: !Ref BuildLogGroup}
+
+  DeployLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub
+        - /aws/codebuild/${O}-${A}-deploy-${E}
+        - {O: {'Fn::ImportValue': !Sub '${CoreStackName}-OrgPrefix'}, A: {'Fn::ImportValue': !Sub '${CoreStackName}-AppName'}, E: {'Fn::ImportValue': !Sub '${CoreStackName}-EnvironmentName'}}
+      RetentionInDays: !Ref LogRetentionDays
+
+  # Every grant is scoped to the core stack: its outputs, its two deploy
+  # secrets, snapshots tagged with its id, and its container service.
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub
+        - ${O}-codebuild-${A}-deploy-${E}
+        - {O: {'Fn::ImportValue': !Sub '${CoreStackName}-OrgPrefix'}, A: {'Fn::ImportValue': !Sub '${CoreStackName}-AppName'}, E: {'Fn::ImportValue': !Sub '${CoreStackName}-EnvironmentName'}}
+      Path: /
+      Description: !Sub Trust portal deploy - database snapshot and Lightsail deployment (deploy/aws/trust-portal-pipeline.yaml, stack ${AWS::StackName}).
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: TrustCodeBuild
+            Effect: Allow
+            Principal: {Service: codebuild.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: {'aws:SourceAccount': !Ref 'AWS::AccountId'}
+              ArnEquals:
+                'aws:SourceArn': !Sub
+                  - arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:project/${O}-${A}-deploy-${E}
+                  - {O: {'Fn::ImportValue': !Sub '${CoreStackName}-OrgPrefix'}, A: {'Fn::ImportValue': !Sub '${CoreStackName}-AppName'}, E: {'Fn::ImportValue': !Sub '${CoreStackName}-EnvironmentName'}}
+      Policies:
+        - PolicyName: !Sub
+            - ${O}-codebuild-${A}-deploy-${E}
+            - {O: {'Fn::ImportValue': !Sub '${CoreStackName}-OrgPrefix'}, A: {'Fn::ImportValue': !Sub '${CoreStackName}-AppName'}, E: {'Fn::ImportValue': !Sub '${CoreStackName}-EnvironmentName'}}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ReadCoreStackOutputs
+                Effect: Allow
+                Action: cloudformation:DescribeStacks
+                Resource: !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${CoreStackName}/*'
+              - Sid: ReadDeploySecrets
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - {'Fn::ImportValue': !Sub '${CoreStackName}-CredentialsSecretArn'}
+                  - {'Fn::ImportValue': !Sub '${CoreStackName}-OwnerSecretArn'}
+              - Sid: SnapshotBeforeDeploy
+                Effect: Allow
+                Action: lightsail:CreateRelationalDatabaseSnapshot
+                Resource: '*'
+                Condition:
+                  StringEquals: {'aws:RequestTag/trust-portal-stack': {'Fn::ImportValue': !Sub '${CoreStackName}-SnapshotTagValue'}}
+                  ForAllValues:StringEquals: {'aws:TagKeys': [trust-portal-stack]}
+              - Sid: CreateDeployment
+                Effect: Allow
+                Action: lightsail:CreateContainerServiceDeployment
+                Resource: {'Fn::ImportValue': !Sub '${CoreStackName}-ContainerServiceArn'}
+              - Sid: PollLightsail
+                Effect: Allow
+                Action: ['lightsail:GetRelationalDatabase', 'lightsail:GetRelationalDatabaseSnapshot', 'lightsail:GetContainerServiceDeployments']
+                Resource: '*'
+                Condition: {StringEquals: {'aws:RequestedRegion': !Ref 'AWS::Region'}}
+              - Sid: PipelineArtifacts
+                Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub '${ArtifactBucket.Arn}/*'
+              - Sid: DeployLogs
+                Effect: Allow
+                Action: ['logs:CreateLogStream', 'logs:PutLogEvents']
+                Resource: !GetAtt DeployLogGroup.Arn
+
+  DeployProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub
+        - ${O}-${A}-deploy-${E}
+        - {O: {'Fn::ImportValue': !Sub '${CoreStackName}-OrgPrefix'}, A: {'Fn::ImportValue': !Sub '${CoreStackName}-AppName'}, E: {'Fn::ImportValue': !Sub '${CoreStackName}-EnvironmentName'}}
+      Description: Snapshots the database, deploys the image to Lightsail and waits until it is healthy.
+      ServiceRole: !GetAtt DeployRole.Arn
+      Source: {Type: CODEPIPELINE, BuildSpec: deploy/aws/buildspec-deploy.yml}
+      Artifacts: {Type: CODEPIPELINE}
+      TimeoutInMinutes: 90
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:7.0
+        EnvironmentVariables:
+          - {Name: STACK_NAME, Value: !Ref CoreStackName}
+          - {Name: WITNESS_ARMED, Value: !Ref WitnessArmed}
+      LogsConfig:
+        CloudWatchLogs: {Status: ENABLED, GroupName: !Ref DeployLogGroup}
+
+  PipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub
+        - ${O}-codepipeline-${A}-${E}
+        - {O: {'Fn::ImportValue': !Sub '${CoreStackName}-OrgPrefix'}, A: {'Fn::ImportValue': !Sub '${CoreStackName}-AppName'}, E: {'Fn::ImportValue': !Sub '${CoreStackName}-EnvironmentName'}}
+      Path: /
+      Description: !Sub Trust portal pipeline (deploy/aws/trust-portal-pipeline.yaml, stack ${AWS::StackName}).
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: TrustCodePipeline
+            Effect: Allow
+            Principal: {Service: codepipeline.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition: {StringEquals: {'aws:SourceAccount': !Ref 'AWS::AccountId'}}
+      Policies:
+        - PolicyName: !Sub
+            - ${O}-codepipeline-${A}-${E}
+            - {O: {'Fn::ImportValue': !Sub '${CoreStackName}-OrgPrefix'}, A: {'Fn::ImportValue': !Sub '${CoreStackName}-AppName'}, E: {'Fn::ImportValue': !Sub '${CoreStackName}-EnvironmentName'}}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: PipelineArtifacts
+                Effect: Allow
+                Action: ['s3:GetObject', 's3:GetObjectVersion', 's3:PutObject', 's3:GetBucketVersioning', 's3:GetBucketLocation']
+                Resource: [!GetAtt ArtifactBucket.Arn, !Sub '${ArtifactBucket.Arn}/*']
+              - Sid: RunBuilds
+                Effect: Allow
+                Action: ['codebuild:StartBuild', 'codebuild:BatchGetBuilds']
+                Resource: [!GetAtt BuildProject.Arn, !GetAtt DeployProject.Arn]
+              - !If
+                - FromGitHub
+                - Sid: UseGitHubConnection
+                  Effect: Allow
+                  Action: ['codeconnections:UseConnection', 'codestar-connections:UseConnection']
+                  Resource: !GetAtt Connection.ConnectionArn
+                - !Ref 'AWS::NoValue'
+              - !If
+                - FromCodeCommit
+                - Sid: ReadCodeCommitSource
+                  Effect: Allow
+                  Action: ['codecommit:GetBranch', 'codecommit:GetCommit', 'codecommit:GetRepository', 'codecommit:UploadArchive', 'codecommit:GetUploadArchiveStatus', 'codecommit:CancelUploadArchive']
+                  Resource: !Sub 'arn:${AWS::Partition}:codecommit:${AWS::Region}:${AWS::AccountId}:${SourceRepository}'
+                - !Ref 'AWS::NoValue'
+
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub
+        - ${O}-${A}-${E}
+        - {O: {'Fn::ImportValue': !Sub '${CoreStackName}-OrgPrefix'}, A: {'Fn::ImportValue': !Sub '${CoreStackName}-AppName'}, E: {'Fn::ImportValue': !Sub '${CoreStackName}-EnvironmentName'}}
+      PipelineType: V2
+      RoleArn: !GetAtt PipelineRole.Arn
+      ArtifactStore: {Type: S3, Location: !Ref ArtifactBucket}
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: Source
+              Namespace: SourceVariables
+              ActionTypeId: !If
+                - FromGitHub
+                - {Category: Source, Owner: AWS, Provider: CodeStarSourceConnection, Version: '1'}
+                - {Category: Source, Owner: AWS, Provider: CodeCommit, Version: '1'}
+              Configuration: !If
+                - FromGitHub
+                - ConnectionArn: !GetAtt Connection.ConnectionArn
+                  FullRepositoryId: !Ref SourceRepository
+                  BranchName: !Ref SourceBranch
+                  OutputArtifactFormat: CODE_ZIP
+                - RepositoryName: !Ref SourceRepository
+                  BranchName: !Ref SourceBranch
+                  PollForSourceChanges: 'false'
+                  OutputArtifactFormat: CODE_ZIP
+              OutputArtifacts: [{Name: Source}]
+        - Name: Build
+          Actions:
+            - Name: Build
+              Namespace: BuildVariables
+              ActionTypeId: {Category: Build, Owner: AWS, Provider: CodeBuild, Version: '1'}
+              Configuration:
+                ProjectName: !Ref BuildProject
+                EnvironmentVariables: '[{"name":"SOURCE_COMMIT","value":"#{SourceVariables.CommitId}","type":"PLAINTEXT"}]'
+              InputArtifacts: [{Name: Source}]
+        - Name: Approval
+          Actions:
+            - Name: Approval
+              ActionTypeId: {Category: Approval, Owner: AWS, Provider: Manual, Version: '1'}
+        - Name: Deploy
+          Actions:
+            - Name: Deploy
+              ActionTypeId: {Category: Build, Owner: AWS, Provider: CodeBuild, Version: '1'}
+              Configuration:
+                ProjectName: !Ref DeployProject
+                EnvironmentVariables: '[{"name":"IMAGE_URI","value":"#{BuildVariables.IMAGE_URI}","type":"PLAINTEXT"}]'
+              InputArtifacts: [{Name: Source}]
+
+  PipelineTriggerRole:
+    Type: AWS::IAM::Role
+    Condition: FromCodeCommit
+    Properties:
+      RoleName: !Sub
+        - ${O}-events-${A}-pipeline-${E}
+        - {O: {'Fn::ImportValue': !Sub '${CoreStackName}-OrgPrefix'}, A: {'Fn::ImportValue': !Sub '${CoreStackName}-AppName'}, E: {'Fn::ImportValue': !Sub '${CoreStackName}-EnvironmentName'}}
+      Path: /
+      Description: !Sub Starts the trust portal pipeline on a source push (deploy/aws/trust-portal-pipeline.yaml, stack ${AWS::StackName}).
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: TrustEventBridge
+            Effect: Allow
+            Principal: {Service: events.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition: {StringEquals: {'aws:SourceAccount': !Ref 'AWS::AccountId'}}
+      Policies:
+        - PolicyName: !Sub
+            - ${O}-events-${A}-pipeline-${E}
+            - {O: {'Fn::ImportValue': !Sub '${CoreStackName}-OrgPrefix'}, A: {'Fn::ImportValue': !Sub '${CoreStackName}-AppName'}, E: {'Fn::ImportValue': !Sub '${CoreStackName}-EnvironmentName'}}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: StartPipeline
+                Effect: Allow
+                Action: codepipeline:StartPipelineExecution
+                Resource: !Sub arn:${AWS::Partition}:codepipeline:${AWS::Region}:${AWS::AccountId}:${Pipeline}
+
+  PipelineTriggerRule:
+    Type: AWS::Events::Rule
+    Condition: FromCodeCommit
+    Properties:
+      Name: !Sub
+        - ${O}-${A}-pipeline-${E}
+        - {O: {'Fn::ImportValue': !Sub '${CoreStackName}-OrgPrefix'}, A: {'Fn::ImportValue': !Sub '${CoreStackName}-AppName'}, E: {'Fn::ImportValue': !Sub '${CoreStackName}-EnvironmentName'}}
+      Description: Starts the trust portal pipeline on a push to the source branch.
+      EventPattern:
+        source: [aws.codecommit]
+        detail-type: [CodeCommit Repository State Change]
+        resources: [!Sub 'arn:${AWS::Partition}:codecommit:${AWS::Region}:${AWS::AccountId}:${SourceRepository}']
+        detail:
+          event: [referenceCreated, referenceUpdated]
+          referenceType: [branch]
+          referenceName: [!Ref SourceBranch]
+      Targets:
+        - Id: pipeline
+          Arn: !Sub arn:${AWS::Partition}:codepipeline:${AWS::Region}:${AWS::AccountId}:${Pipeline}
+          RoleArn: !GetAtt PipelineTriggerRole.Arn
+
+Outputs:
+  PipelineName: {Value: !Ref Pipeline}
+  ArtifactBucketName: {Value: !Ref ArtifactBucket}
+  ConnectionArn:
+    Condition: FromGitHub
+    Value: !GetAtt Connection.ConnectionArn

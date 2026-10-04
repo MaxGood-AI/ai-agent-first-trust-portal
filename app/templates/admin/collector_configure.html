@@ -55,6 +55,7 @@
 {% endif %}
 
 <form method="POST" action="{{ url_for('admin.collector_configure_submit', name=name) }}" id="collector-form" class="collector-form">
+    {{ csrf_field() }}
     {% if return_to %}<input type="hidden" name="return_to" value="{{ return_to }}">{% endif %}
 
     {% set current_mode = config.credential_mode if config else ('task_role' if needs_aws_creds else 'none') %}
@@ -66,20 +67,21 @@
         <label for="credential_mode">Credential mode</label>
         <select id="credential_mode" name="credential_mode" required>
             <option value="task_role" {% if current_mode == 'task_role' %}selected{% endif %}>
-                Task role (use the container's attached IAM role)
+                Use the portal's runtime role
             </option>
             <option value="task_role_assume" {% if current_mode == 'task_role_assume' %}selected{% endif %}>
-                Assume a dedicated collector role (recommended for same-account AWS)
+                Assume a dedicated collector role
             </option>
             <option value="access_keys" {% if current_mode == 'access_keys' %}selected{% endif %}>
                 Provide access keys
             </option>
         </select>
         <p class="help-text">
-            For ECS Fargate deployments in the same AWS account, use <strong>Assume a
-            dedicated collector role</strong>. The portal will use its task role to assume
-            a read-only scanning role you've provisioned (see
-            <code>iam/terraform/</code> in the repo).
+            <strong>Use the portal's runtime role</strong> when the runtime role carries the
+            read-only collector policy (<code>iam/trust-portal-collector-policy.json</code>;
+            the AWS deployment in <code>deploy/</code> attaches it). Use <strong>Assume a
+            dedicated collector role</strong> to scan through a separate read-only role that the
+            runtime role may assume.
         </p>
     </div>
     {% elif name == 'platform' %}
@@ -209,7 +211,7 @@
     <div class="form-row">
         <label for="services_json">Services (JSON)</label>
         <textarea id="services_json" name="services_json" rows="10"
-                  placeholder='[{"name": "maxgoodai", "url": "https://api.example.com", "health_path": "/api/health", "auth": "none"}]'>{{ ((config.config or {}).get('services') or []) | tojson(indent=2) if config else '[]' }}</textarea>
+                  placeholder='[{"name": "api", "url": "https://api.example.com", "health_path": "/api/health", "auth": "none"}]'>{{ ((config.config or {}).get('services') or []) | tojson(indent=2) if config else '[]' }}</textarea>
         <p class="help-text">
             Array of <code>{name, url, health_path, auth}</code> objects.
             <code>auth</code> is one of <code>none</code>, <code>bearer</code>, or

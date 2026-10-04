@@ -54,11 +54,11 @@
                     <summary>View</summary>
                     {% if e.old_values %}
                     <strong>Old:</strong>
-                    <pre style="max-width: 400px; overflow-x: auto; font-size: 0.8em;">{{ e.old_values | tojson(indent=2) }}</pre>
+                    <pre style="max-width: 400px; overflow-x: auto; font-size: 0.8em;">{{ e.old_values | redact_audit | tojson(indent=2) }}</pre>
                     {% endif %}
                     {% if e.new_values %}
                     <strong>New:</strong>
-                    <pre style="max-width: 400px; overflow-x: auto; font-size: 0.8em;">{{ e.new_values | tojson(indent=2) }}</pre>
+                    <pre style="max-width: 400px; overflow-x: auto; font-size: 0.8em;">{{ e.new_values | redact_audit | tojson(indent=2) }}</pre>
                     {% endif %}
                 </details>
             </td>

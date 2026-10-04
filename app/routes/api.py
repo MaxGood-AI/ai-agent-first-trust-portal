@@ -11,7 +11,8 @@ from app.models import (
     db, Control, Policy, TestRecord, Evidence, DecisionLogSession,
     DecisionLogEntry, System, Vendor, TeamMember, AuditLog,
 )
-from app.auth import require_api_key, require_admin
+from app.auth import require_admin, require_api_key, require_team, require_writer
+from app.services.audit_chain import AuditChainError, redact_values, verify_chain
 
 logger = logging.getLogger(__name__)
 
@@ -20,13 +21,16 @@ api_bp = Blueprint("api", __name__)
 
 @api_bp.route("/health")
 def health():
-    """Health check endpoint.
+    """Health check endpoint (used by load balancers and deployments).
     ---
     tags:
       - System
     responses:
       200:
-        description: Service is healthy and database is reachable
+        description: >
+          The database is reachable and its schema is at the code's migration head
+          (schema "current"), or at a newer revision this release does not know
+          (schema "newer", after a rollback to the previous image)
         content:
           application/json:
             schema:
@@ -41,15 +45,69 @@ def health():
                 database:
                   type: string
                   example: connected
+                schema:
+                  type: string
+                  example: current
+                version:
+                  type: string
+                  description: PORTAL_VERSION baked into the image
+                witness:
+                  type: string
+                  enum: [enabled, unarmed, disabled, unconfigured]
+                  description: >
+                    Audit chain-head publishing: enabled (bucket set and witness armed),
+                    unarmed (bucket set, not armed: nothing is published),
+                    disabled (AUDIT_WITNESS_DISABLED set), or unconfigured (no bucket)
+                last_published_at:
+                  type: string
+                  nullable: true
+                  description: When the latest chain head was published (UTC, ISO 8601)
+                witness_stale:
+                  type: boolean
+                  description: >
+                    True when the witness is enabled, the chain head moved and nothing was
+                    published for more than two hours
       503:
-        description: Service is degraded (database unreachable)
+        description: Degraded (database unreachable, or schema not at head)
     """
+    from flask import current_app
+
+    from app.services.audit_witness import witness_state, witness_status
+
+    body = {"status": "ok", "service": "trust-portal", "database": "connected",
+            "schema": "current", "version": current_app.config.get("PORTAL_VERSION", "dev"),
+            "witness": witness_state(), "last_published_at": None, "witness_stale": False}
     try:
         db.session.execute(db.text("SELECT 1"))
-        return jsonify({"status": "ok", "service": "trust-portal", "database": "connected"})
     except Exception:
         logger.warning("Health check: database unreachable")
-        return jsonify({"status": "degraded", "service": "trust-portal", "database": "unreachable"}), 503
+        db.session.rollback()
+        body.update(status="degraded", database="unreachable", schema="unknown")
+        return jsonify(body), 503
+    try:
+        status = witness_status(db.session)
+        body.update(witness=status["state"], last_published_at=status["last_published_at"],
+                    witness_stale=status["stale"])
+    except Exception:  # noqa: BLE001 - a schema without the witness tables reports the configured state
+        db.session.rollback()
+
+    if current_app.config.get("HEALTH_REQUIRE_SCHEMA_HEAD", True):
+        try:
+            current = db.session.execute(db.text("SELECT version_num FROM alembic_version")).scalar()
+        except Exception:
+            db.session.rollback()
+            current = None
+        from cli.db_cmd import classify_revision
+
+        state = classify_revision(current)
+        if state == "newer":
+            # A later release migrated the database (expand-only migrations keep
+            # this release working): serve, and say so.
+            body["schema"] = "newer"
+        elif state != "current":
+            body.update(status="degraded", schema=state)
+            return jsonify(body), 503
+    return jsonify(body)
 
 
 @api_bp.route("/compliance-score")
@@ -520,6 +578,7 @@ def evidence_gaps():
 
 @api_bp.route("/decision-log/ingest", methods=["POST"])
 @require_api_key
+@require_writer
 def ingest_decision_logs():
     """Ingest pending session transcripts from decision-logs/ directory.
     ---
@@ -548,13 +607,15 @@ def ingest_decision_logs():
 
 @api_bp.route("/decision-log/upload", methods=["POST"])
 @require_api_key
+@require_writer
 def upload_decision_log():
     """Upload a JSONL decision log transcript directly.
 
     The body is a Claude Code (or openclaude) JSONL transcript or a Codex
-    rollout JSONL; the format is detected from the records. The session's
+    rollout JSONL; the format is detected from the records. A new session's
     `agent_type` is the `agent` parameter when given, otherwise the
-    detected format's agent (`codex` or `claude_code`).
+    detected format's agent (`codex` or `claude_code`); a stored session
+    keeps its `agent_type`.
     ---
     tags:
       - Decision Log
@@ -583,7 +644,8 @@ def upload_decision_log():
           Agent CLI that wrote the transcript, e.g. claude-code, openclaude or
           codex. Stored lower-cased with hyphens as underscores (claude-code
           is stored as claude_code); letters, digits, '-' and '_' only, at
-          most 50 characters. Detected from the transcript format if omitted.
+          most 50 characters. Detected from the transcript format if omitted. Labels
+          only a session this upload creates.
     requestBody:
       required: true
       content:
@@ -593,7 +655,20 @@ def upload_decision_log():
             description: JSONL transcript content (Claude Code, openclaude or Codex rollout format)
     responses:
       200:
-        description: Session ingested successfully
+        description: >
+          Transcript stored. status is "created" (new session), "replaced" (the upload extends
+          the stored transcript: the stored entries are an exact prefix of its entries and it
+          has more; the new entries are appended and the previous version is kept as
+          superseded), "unchanged" (identical re-upload; no writes) or "kept_existing" (the
+          upload's entries are a prefix of the stored ones; no writes). Only the member who
+          submitted the session or a compliance admin may extend it, and only an admin may
+          extend a session flagged as a conflict (the evidence repository's version replaced
+          entries submitted through the API); appended entries must
+          not be timestamped before the latest stored entry. Session metadata (model, cwd,
+          git branch, start time, exit reason, submitter, transcript path) is set by the
+          first upload; a later upload fills unset fields, and only an admin's upload
+          replaces set ones (audited). The agent type is set by the first upload and never
+          changes. Entries are returned in transcript order.
         content:
           application/json:
             schema:
@@ -603,19 +678,57 @@ def upload_decision_log():
                   type: string
                 entries:
                   type: integer
+                status:
+                  type: string
+                  enum: [created, replaced, unchanged, kept_existing]
+                content_sha256:
+                  type: string
+                content_bytes:
+                  type: integer
                 agent_type:
                   type: string
                   example: codex
       400:
-        description: Empty content, invalid agent, or duplicate session
+        description: >
+          Empty body, invalid session id, invalid agent, or an invalid transcript: a role,
+          message id, model, cwd or git branch that is not a string or is longer than its
+          column (20, 100, 100, 500 and 200 characters).
       401:
         description: Missing or invalid API key
+      403:
+        description: >
+          Rejected: the upload would extend a session submitted by another member (only its
+          submitter or a compliance admin may). The stored transcript is unchanged; the
+          upload is kept as a rejected version for review.
+          Body {"error", "status": "rejected", "session_id"}.
+      409:
+        description: >
+          Rejected: the upload does not extend the stored transcript of this session, or an
+          appended entry is timestamped before the latest stored entry. The stored transcript
+          is unchanged; the upload is kept as a rejected version for review.
+          Body {"error", "status": "rejected", "session_id"}.
+      411:
+        description: >
+          The body has no Content-Length and the server cannot delimit it (send
+          Content-Length, or chunked encoding through a server that terminates the input).
+      413:
+        description: >
+          The body exceeds the request size limit or the 32 MiB decision-log transcript limit,
+          the transcript has more than 50,000 entries, one of its lines is longer than 8 MiB,
+          or its tool calls as stored (JSON, UTF-8) are longer than 8 MiB for one entry or
+          32 MiB for all entries; nothing is stored. Body {"error"}.
+      429:
+        description: >
+          The upload does not fit in the server's transcript import budget: a server process
+          imports at most 48 MiB of transcripts at once, each taking its Content-Length (at
+          least 1 MiB; 32 MiB without a Content-Length). Nothing was read or stored. Retry
+          after the number of seconds in the Retry-After header.
+          Body {"error", "status": "busy"}.
     """
-    content = request.get_data(as_text=True)
-    if not content or not content.strip():
-        return jsonify({"error": "Empty request body"}), 400
+    from flask import current_app
 
-    from app.services.transcript_ingest import ingest_from_content, normalize_agent_type
+    from app.services import evidence_import_decision_logs as decision_logs
+    from app.services.transcript_ingest import normalize_agent_type
 
     agent = request.args.get("agent")
     agent_type = None
@@ -626,27 +739,187 @@ def upload_decision_log():
                 "error": "Invalid agent: use letters, digits, '-' or '_', at most 50 characters",
             }), 400
 
+    # Read the body in bounded chunks: a body over the limit is refused (413), never truncated,
+    # whether its length is declared (Content-Length) or not (chunked). A body without
+    # Content-Length is read only when the server delimits it (wsgi.input_terminated); a
+    # transfer-coded body the server does not delimit is refused (411). With neither header
+    # the body is empty (HTTP/1.1 message length rules). The limit is the smaller of the
+    # request limit and the decision-log transcript limit.
+    configured = current_app.config.get("MAX_CONTENT_LENGTH")
+    cap = decision_logs.MAX_TRANSCRIPT_BYTES
+    limit = cap if configured is None else min(configured, cap)
+    too_large = {"error": f"Request body exceeds the {limit} byte limit"}
+    declared = request.content_length
+    if declared is None:
+        if request.environ.get("wsgi.input_terminated"):
+            stream = request.environ["wsgi.input"]
+        elif request.headers.get("Transfer-Encoding"):
+            return jsonify({"error": "Content-Length required"}), 411
+        else:
+            return jsonify({"error": "Empty request body"}), 400
+    elif declared > limit:
+        return jsonify(too_large), 413
+    else:
+        stream = request.stream
+    # The body is read and stored while holding its Content-Length (the whole limit when it
+    # has none) of the process's transcript import budget; an upload that does not fit is
+    # refused before its body is read.
+    try:
+        with decision_logs.import_slot(timeout=0, size=limit if declared is None else declared):
+            return _store_uploaded_transcript(stream, limit, too_large, agent_type)
+    except decision_logs.ImportBusyError as exc:
+        response = jsonify({"error": str(exc), "status": "busy"})
+        response.headers["Retry-After"] = str(DECISION_LOG_RETRY_AFTER_SECONDS)
+        return response, 429
+
+
+DECISION_LOG_RETRY_AFTER_SECONDS = 5
+
+
+def _store_uploaded_transcript(stream, limit, too_large, agent_type):
+    """Read an upload's body (at most ``limit`` bytes) and store it, labelling a new
+    session ``agent_type`` when given (upload_decision_log)."""
+    from app.services.evidence_import import (
+        AUTHORITY_ADMIN,
+        AUTHORITY_MEMBER,
+        import_decision_log,
+        is_deadlock,
+    )
+    from app.services.evidence_import_decision_logs import TranscriptLimitError
+
+    raw = bytearray()
+    while True:
+        chunk = stream.read(min(1024 * 1024, limit + 1 - len(raw)))
+        if not chunk:
+            break
+        raw += chunk
+        if len(raw) > limit:
+            return jsonify(too_large), 413
+    if not raw or raw.isspace():
+        return jsonify({"error": "Empty request body"}), 400
+
     session_id = request.args.get("session_id") or str(uuid.uuid4())
     exit_reason = request.args.get("exit_reason")
+    member = g.current_team_member
+    member_id = member.id
+    authority = AUTHORITY_ADMIN if member.is_compliance_admin else AUTHORITY_MEMBER
 
-    session = ingest_from_content(
-        content=content,
-        session_id=session_id,
-        submitted_by=g.current_team_member.id,
-        exit_reason=exit_reason,
-        agent_type=agent_type,
-    )
+    result = None
+    for attempt in (1, 2):
+        try:
+            result = import_decision_log(
+                raw,
+                session_id=session_id,
+                exit_reason=exit_reason,
+                submitted_by=member_id,
+                authority=authority,
+                agent_type=agent_type,
+            )
+            db.session.commit()
+            break
+        except TranscriptLimitError as exc:
+            db.session.rollback()
+            return jsonify({"error": str(exc)}), 413
+        except ValueError as exc:
+            db.session.rollback()
+            return jsonify({"error": str(exc)}), 400
+        except Exception as exc:
+            db.session.rollback()
+            if attempt == 1 and is_deadlock(exc):
+                logger.warning("Deadlock storing decision log %s; retrying once", session_id)
+                continue
+            raise
 
-    if session is None:
-        return jsonify({"error": "Session already exists", "session_id": session_id}), 400
+    if result.status == "rejected":
+        return jsonify({"error": result.reason, "status": "rejected",
+                        "session_id": result.session_id}), 403 if result.forbidden else 409
+    return jsonify({
+        "session_id": result.session_id,
+        "entries": result.entries,
+        "status": result.status,
+        "content_sha256": result.content_sha256,
+        "content_bytes": result.content_bytes,
+        "agent_type": result.agent_type,
+    })
 
-    entry_count = session.interactions.count()
-    return jsonify({"session_id": session.id, "entries": entry_count,
-                    "agent_type": session.agent_type})
+
+MAX_DECISION_LOG_VERIFY_SESSIONS = 500
+
+
+@api_bp.route("/decision-log/verify")
+@require_api_key
+@require_admin
+def verify_decision_log_history():
+    """Verify decision-log version history, optionally against the evidence repository (compliance admins).
+    ---
+    tags:
+      - Decision Log
+    security:
+      - ApiKeyAuth: []
+    parameters:
+      - name: against_repo
+        in: query
+        schema:
+          type: boolean
+        description: >
+          Also fetch every repository-import version from the evidence git source at its recorded
+          commit and compare its SHA-256, entry count and entries digest
+      - name: source
+        in: query
+        schema:
+          type: string
+        description: The evidence git source (name or id) when there is more than one
+      - name: after_session
+        in: query
+        schema:
+          type: string
+        description: Continue after this session id (from next_after_session)
+      - name: max_sessions
+        in: query
+        schema:
+          type: integer
+          default: 50
+          maximum: 500
+    responses:
+      200:
+        description: >
+          {"status": valid | unverified | broken, "decision_logs": {...version-history result...,
+          "against_repo": {...}}, "next_after_session"}; python -m cli audit-verify --decision-logs
+          --against-repo has no limits
+      400:
+        description: Invalid parameters, or no single evidence git source
+    """
+    from app.services import decision_log_repo_verify as repo_verify
+    from app.services.decision_log_verify import verify_decision_logs
+    from app.services.git_sources.service import build_provider_for
+
+    try:
+        max_sessions = max(1, min(int(request.args.get("max_sessions", 50)), MAX_DECISION_LOG_VERIFY_SESSIONS))
+    except ValueError:
+        return jsonify({"error": "max_sessions must be an integer"}), 400
+    after = request.args.get("after_session") or None
+    checked = verify_decision_logs(db.session, after_session=after, max_sessions=max_sessions)
+    status = "broken" if checked["mismatch_count"] else "valid"
+    if request.args.get("against_repo", "").lower() in ("1", "true", "yes"):
+        try:
+            evidence = repo_verify.evidence_source(request.args.get("source"))
+            provider = build_provider_for(evidence)
+        except Exception as exc:  # noqa: BLE001 - no source, several sources, credentials
+            return jsonify({"error": str(exc)[:300]}), 400
+        repo = repo_verify.verify_against_repo(db.session, provider, source=evidence, after_session=after,
+                                               max_sessions=max_sessions)
+        checked["against_repo"] = repo
+        if repo["status"] == "broken":
+            status = "broken"
+        elif repo["status"] == "unverified" and status == "valid":
+            status = "unverified"
+    return jsonify({"status": status, "decision_logs": checked,
+                    "next_after_session": checked["next_after_session"]})
 
 
 @api_bp.route("/decision-log/sessions")
 @require_api_key
+@require_team
 def list_sessions():
     """List all ingested decision log sessions.
     ---
@@ -654,55 +927,147 @@ def list_sessions():
       - Decision Log
     security:
       - ApiKeyAuth: []
+    parameters:
+      - name: page
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 1
+      - name: per_page
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 100
+          maximum: 500
     responses:
       200:
-        description: List of sessions with metadata
+        description: >
+          One page of sessions, newest first (by started_at; sessions without one last):
+          {"items": [...], "page", "per_page", "total", "pages"}. Each item carries
+          content_sha256 and content_bytes of the stored transcript, so a client can skip
+          uploading an identical file. conflict is true (with conflict_at, when it last
+          happened) when the evidence repository's version of the session replaced entries
+          submitted through the API; the replaced version is kept as a superseded version.
         content:
           application/json:
             schema:
-              type: array
-              items:
-                type: object
-                properties:
-                  id:
-                    type: string
-                  agent_type:
-                    type: string
-                  model:
-                    type: string
-                  git_branch:
-                    type: string
-                  started_at:
-                    type: string
-                    format: date-time
-                  ended_at:
-                    type: string
-                    format: date-time
-                  submitted_by:
-                    type: string
-                  entry_count:
-                    type: integer
-                  verifications:
-                    type: integer
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      agent_type:
+                        type: string
+                      model:
+                        type: string
+                      git_branch:
+                        type: string
+                      started_at:
+                        type: string
+                        format: date-time
+                      ended_at:
+                        type: string
+                        format: date-time
+                      submitted_by:
+                        type: string
+                      entry_count:
+                        type: integer
+                      verifications:
+                        type: integer
+                        description: Verification entries among the confirmed entries (the evidence repository's once it supplied any)
+                      content_sha256:
+                        type: string
+                      content_bytes:
+                        type: integer
+                      conflict:
+                        type: boolean
+                      conflict_at:
+                        type: string
+                        format: date-time
+                        nullable: true
+                page:
+                  type: integer
+                per_page:
+                  type: integer
+                total:
+                  type: integer
+                pages:
+                  type: integer
+      400:
+        description: page or per_page is not an integer
       401:
         description: Missing or invalid API key
     """
-    sessions = DecisionLogSession.query.order_by(DecisionLogSession.started_at.desc()).all()
-    return jsonify([{
-        "id": s.id,
-        "agent_type": s.agent_type,
-        "model": s.model,
-        "git_branch": s.git_branch,
-        "started_at": s.started_at.isoformat() if s.started_at else None,
-        "ended_at": s.ended_at.isoformat() if s.ended_at else None,
-        "submitted_by": s.submitted_by,
-        "entry_count": s.interactions.count(),
-        "verifications": s.interactions.filter_by(is_verification=True).count(),
-    } for s in sessions])
+    try:
+        page = max(1, int(request.args.get("page", 1)))
+        per_page = max(1, min(int(request.args.get("per_page", 100)), 500))
+    except ValueError:
+        return jsonify({"error": "page and per_page must be integers"}), 400
+
+    query = DecisionLogSession.query.order_by(
+        DecisionLogSession.started_at.desc().nullslast(), DecisionLogSession.id)
+    total = query.count()
+    sessions = query.offset((page - 1) * per_page).limit(per_page).all()
+
+    ids = [s.id for s in sessions]
+    counts = {}
+    verifications = {}
+    if ids:
+        from sqlalchemy import func
+
+        from app.services.evidence_import_decision_logs import confirmed_entry_limit
+        for session_id, count in (db.session.query(DecisionLogEntry.session_id, func.count(DecisionLogEntry.id))
+                                  .filter(DecisionLogEntry.session_id.in_(ids))
+                                  .group_by(DecisionLogEntry.session_id).all()):
+            counts[session_id] = int(count)
+        # A verification counts only among the confirmed entries (confirmed_entry_limit).
+        limits = {s.id: confirmed_entry_limit(s, counts.get(s.id, 0)) for s in sessions}
+        position = func.row_number().over(partition_by=DecisionLogEntry.session_id,
+                                          order_by=DecisionLogEntry.id).label("position")
+        ranked = (db.session.query(DecisionLogEntry.session_id.label("sid"),
+                                   DecisionLogEntry.is_verification.label("verification"), position)
+                  .filter(DecisionLogEntry.session_id.in_(ids)).subquery())
+        for session_id, entry_position in (db.session.query(ranked.c.sid, ranked.c.position)
+                                           .filter(ranked.c.verification.is_(True)).all()):
+            if limits[session_id] is None or entry_position <= limits[session_id]:
+                verifications[session_id] = verifications.get(session_id, 0) + 1
+
+    return jsonify({
+        "items": [{
+            "id": s.id,
+            "agent_type": s.agent_type,
+            "model": s.model,
+            "git_branch": s.git_branch,
+            "started_at": s.started_at.isoformat() if s.started_at else None,
+            "ended_at": s.ended_at.isoformat() if s.ended_at else None,
+            # A session the evidence repository supplied is the repository's: submitted_by shows the
+            # repository import (null); created_by keeps the member whose upload created it.
+            "submitted_by": None if limits[s.id] is not None else s.submitted_by,
+            "created_by": s.submitted_by,
+            "repository_held": limits[s.id] is not None,
+            "entry_count": counts.get(s.id, 0),
+            "verifications": verifications.get(s.id, 0),
+            "content_sha256": s.content_sha256,
+            "content_bytes": s.content_bytes,
+            "conflict": s.conflict_at is not None,
+            "conflict_at": s.conflict_at.isoformat() if s.conflict_at else None,
+        } for s in sessions],
+        "page": page,
+        "per_page": per_page,
+        "total": total,
+        "pages": (total + per_page - 1) // per_page,
+    })
 
 
 @api_bp.route("/decision-log/session/<session_id>")
 @require_api_key
+@require_team
 def get_session(session_id):
     """Get a session's entries (the decision log).
     ---
@@ -719,14 +1084,24 @@ def get_session(session_id):
         description: The session ID
     responses:
       200:
-        description: Session details with all entries
+        description: >
+          Session details with all entries, in transcript order (the order they were
+          stored); entry timestamps never reorder them. session.conflict is true (with
+          conflict_at and conflict_detail) when the evidence repository's version replaced
+          entries submitted through the API. An entry after the ones the evidence repository
+          supplied is "unconfirmed" and never a verification (is_verification false).
       401:
         description: Missing or invalid API key
       404:
         description: Session not found
     """
-    session = DecisionLogSession.query.get_or_404(session_id)
-    entries = session.interactions.all()
+    from app.services.evidence_import_decision_logs import confirmed_entry_limit
+
+    session = db.get_or_404(DecisionLogSession, session_id)
+    entries = (DecisionLogEntry.query.filter_by(session_id=session.id)
+               .order_by(DecisionLogEntry.id).all())
+    limit = confirmed_entry_limit(session, len(entries))
+    confirmed = len(entries) if limit is None else limit
     return jsonify({
         "session": {
             "id": session.id,
@@ -736,20 +1111,27 @@ def get_session(session_id):
             "git_branch": session.git_branch,
             "started_at": session.started_at.isoformat() if session.started_at else None,
             "ended_at": session.ended_at.isoformat() if session.ended_at else None,
-            "submitted_by": session.submitted_by,
+            "submitted_by": None if limit is not None else session.submitted_by,
+            "created_by": session.submitted_by,
+            "repository_held": limit is not None,
+            "conflict": session.conflict_at is not None,
+            "conflict_at": session.conflict_at.isoformat() if session.conflict_at else None,
+            "conflict_detail": session.conflict_detail,
         },
         "entries": [{
             "role": e.role,
             "content_text": e.content_text,
             "has_tool_calls": e.tool_calls is not None,
             "timestamp": e.timestamp.isoformat() if e.timestamp else None,
-            "is_verification": e.is_verification,
-        } for e in entries],
+            "is_verification": bool(e.is_verification) and position < confirmed,
+            "unconfirmed": position >= confirmed,
+        } for position, e in enumerate(entries)],
     })
 
 
 @api_bp.route("/audit-log")
 @require_api_key
+@require_team
 def audit_log():
     """Query the audit log for compliance data changes.
     ---
@@ -857,8 +1239,17 @@ def audit_log():
         except ValueError:
             pass
 
-    limit = min(int(request.args.get("limit", 50)), 200)
-    entries = query.order_by(AuditLog.changed_at.desc()).limit(limit).all()
+    try:
+        limit = max(1, min(int(request.args.get("limit", 50)), 200))
+    except ValueError:
+        return jsonify({"error": "limit must be an integer"}), 400
+    before_id = request.args.get("before_id")
+    if before_id:
+        try:
+            query = query.filter(AuditLog.id < int(before_id))
+        except ValueError:
+            return jsonify({"error": "before_id must be an integer"}), 400
+    entries = query.order_by(AuditLog.id.desc()).limit(limit).all()
 
     from app.models.team_member import TeamMember
     member_ids = {e.changed_by for e in entries if e.changed_by}
@@ -872,23 +1263,81 @@ def audit_log():
         "table_name": e.table_name,
         "record_id": e.record_id,
         "action": e.action,
-        "old_values": e.old_values,
-        "new_values": e.new_values,
+        "old_values": redact_values(e.old_values),
+        "new_values": redact_values(e.new_values),
         "changed_by": e.changed_by,
         "changed_by_name": members.get(e.changed_by) if e.changed_by else None,
         "changed_at": e.changed_at.isoformat() if e.changed_at else None,
+        "row_hash": e.row_hash,
+        "previous_hash": e.previous_hash,
     } for e in entries])
 
 
-@api_bp.route("/audit-log/verify")
+MAX_VERIFY_ROWS = 250_000
+MAX_WITNESS_HEADS = 10_000
+
+
+@api_bp.route("/audit-log/verify", methods=["GET", "POST"])
 @require_api_key
+@require_admin
 def verify_audit_log():
-    """Verify the integrity of the audit log hash chain.
+    """Verify the audit log hash chain by recomputing every hash (compliance admins).
+
+    POST with ``{"heads": [...]}`` (at most 10,000) also checks published chain
+    heads (the witness objects from the Object Lock bucket, downloaded by the
+    caller); see ``app.services.audit_witness`` for the rules. A chain that
+    starts with an anchor is checked against its archive manifest in the
+    witness bucket, read by the portal itself (``app.services.audit_archive``);
+    without a witness bucket, or without read access to it, the result is
+    ``unverified``. At most 250,000 rows are verified per request; continue
+    with ``after_id`` and ``expected_previous_hash``. ``python -m cli
+    audit-verify`` has no limits.
     ---
     tags:
       - Audit
     security:
       - ApiKeyAuth: []
+    requestBody:
+      required: false
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              heads:
+                type: array
+                description: >
+                  Published chain heads as downloaded: {"key": object key under chain-heads/,
+                  "head": the trust-portal-chain-head/v1 object}. The key is authoritative;
+                  an item whose head disagrees with its key, or is malformed, is a 400.
+                items:
+                  type: object
+                  properties:
+                    key:
+                      type: string
+                    head:
+                      type: object
+    parameters:
+      - name: max_rows
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 100000
+          maximum: 250000
+        description: Stop after this many rows; resume with after_id and expected_previous_hash
+      - name: after_id
+        in: query
+        required: false
+        schema:
+          type: integer
+        description: Continue verification after this audit_log id (from next_after_id)
+      - name: expected_previous_hash
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Required with after_id (from the previous response)
     responses:
       200:
         description: Verification result
@@ -899,83 +1348,103 @@ def verify_audit_log():
               properties:
                 status:
                   type: string
-                  enum: [valid, broken, empty, no_hashes]
-                total_entries:
-                  type: integer
+                  enum: [valid, intact_with_forks, unverified, broken, empty, no_hashes, unsupported]
+                  description: >
+                    valid = every hash recomputes and every link points at its predecessor;
+                    intact_with_forks = content intact, but some rows link to an earlier row
+                    than their predecessor (concurrent writers); unverified = intact, but the
+                    chain's anchor could not be checked against its archive manifest (no
+                    witness bucket access); broken = altered content, a link to no earlier
+                    row, a witness mismatch or an anchor whose manifest does not match
                 verified:
                   type: integer
-                chain_head:
-                  type: string
-                  description: The most recent row_hash
+                content_mismatches:
+                  type: integer
+                forks:
+                  type: integer
+                true_breaks:
+                  type: integer
+                first_content_mismatch_id:
+                  type: integer
+                  nullable: true
+                first_fork_id:
+                  type: integer
+                  nullable: true
+                first_true_break_id:
+                  type: integer
+                  nullable: true
+                witness_mismatches:
+                  type: integer
+                  description: Published heads whose row is missing or different (POST with heads)
+                breaks:
+                  type: integer
+                  description: content_mismatches + forks + true_breaks + witness_mismatches
                 first_break:
                   type: object
                   nullable: true
-                  description: Details of the first broken link, if any
+                chain_head:
+                  type: string
+                anchor:
+                  type: object
+                  nullable: true
+                  description: >
+                    The ANCHOR row the chain starts from (archived chain head, archive id and
+                    SHA-256, archive manifest key and SHA-256)
+                anchor_verification:
+                  type: object
+                  nullable: true
+                  description: >
+                    The anchor checked against its archive manifest: status verified, failed
+                    or unverified; issues (why it failed); reasons (why it was not checked)
+                complete:
+                  type: boolean
+                next_after_id:
+                  type: integer
+                  nullable: true
+                expected_previous_hash:
+                  type: string
+                  nullable: true
+      400:
+        description: Invalid parameters
       401:
         description: Missing or invalid API key
     """
-    from app.models.audit_log import AuditLog
+    try:
+        max_rows = max(1, min(int(request.args.get("max_rows", 100_000)), MAX_VERIFY_ROWS))
+        after_id = request.args.get("after_id")
+        after_id = int(after_id) if after_id else None
+    except ValueError:
+        return jsonify({"error": "max_rows and after_id must be integers"}), 400
+    heads = None
+    if request.method == "POST":
+        from app.services.audit_witness import WitnessError, heads_from_items
 
-    total = AuditLog.query.count()
+        body = request.get_json(silent=True)
+        raw_heads = body.get("heads", []) if isinstance(body, dict) else None
+        if not isinstance(raw_heads, list) or len(raw_heads) > MAX_WITNESS_HEADS:
+            return jsonify({"error": f"heads must be a list of at most {MAX_WITNESS_HEADS} "
+                                     "{\"key\", \"head\"} items; verify larger sets with "
+                                     "python -m cli audit-verify"}), 400
+        try:
+            heads = heads_from_items(raw_heads, strict=True)
+        except WitnessError as exc:
+            return jsonify({"error": str(exc)}), 400
+    from app.services.audit_archive import verify_anchor
+    from app.services.audit_witness import witness_bucket
 
-    if total == 0:
-        return jsonify({
-            "status": "empty",
-            "total_entries": 0,
-            "verified": 0,
-            "chain_head": None,
-            "first_break": None,
-        })
-
-    # Fetch only the hash columns in order — avoids loading full row data
-    rows = (
-        db.session.query(AuditLog.id, AuditLog.row_hash, AuditLog.previous_hash)
-        .order_by(AuditLog.id.asc())
-        .all()
-    )
-
-    # Check if hash chain is populated (pre-migration entries won't have hashes)
-    hashed_rows = [(r.id, r.row_hash, r.previous_hash) for r in rows if r.row_hash]
-
-    if not hashed_rows:
-        return jsonify({
-            "status": "no_hashes",
-            "total_entries": total,
-            "verified": 0,
-            "chain_head": None,
-            "first_break": None,
-            "message": "No hash chain data found. Entries predate the hash chain migration.",
-        })
-
-    genesis_hash = "0" * 64
-    verified = 0
-    first_break = None
-
-    for i, (entry_id, row_hash, previous_hash) in enumerate(hashed_rows):
-        expected_prev = hashed_rows[i - 1][1] if i > 0 else genesis_hash
-
-        if previous_hash != expected_prev:
-            first_break = {
-                "id": entry_id,
-                "position": i,
-                "issue": "Chain break: previous_hash does not match preceding entry's row_hash",
-                "expected": expected_prev,
-                "actual": previous_hash,
-            }
-            break
-
-        verified += 1
-
-    chain_head = hashed_rows[-1][1]
-
-    return jsonify({
-        "status": "valid" if first_break is None else "broken",
-        "total_entries": total,
-        "hashed_entries": len(hashed_rows),
-        "verified": verified,
-        "chain_head": chain_head,
-        "first_break": first_break,
-    })
+    bucket = witness_bucket()
+    try:
+        result = verify_chain(
+            db.session,
+            after_id=after_id,
+            expected_previous_hash=request.args.get("expected_previous_hash"),
+            max_rows=max_rows,
+            witness_heads=heads,
+            anchor_verifier=lambda anchor: verify_anchor(anchor, bucket=bucket),
+        )
+    except AuditChainError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(result)
 
 
 @api_bp.route("/settings", methods=["GET"])
@@ -1016,20 +1485,34 @@ def update_settings():
         description: Not a compliance admin
     """
     from app.services.settings_service import update_portal_settings, get_portal_settings as _get
-    data = request.get_json()
-    update_portal_settings(data, updated_by=g.current_team_member.id)
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "JSON object body required"}), 400
+    try:
+        update_portal_settings(data, updated_by=g.current_team_member.id)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     return jsonify(_get())
 
 
 def _create_evidence_items(items, test_record_id):
     """Create Evidence records from a list of evidence item dicts.
 
-    Returns (created_count, error_message). If error_message is not None,
-    the caller should return a 400 response with that message.
+    Every item is validated before any is added: each needs ``evidence_type``
+    and ``description``, base64 ``file_data`` must decode, and ``url`` must be
+    an http(s) URL. Returns (created_count, error_message). If error_message
+    is not None, nothing was added and the caller should return a 400
+    response with that message.
     """
+    from app.security import url_fields_error
+
+    decoded = []
     for item in items:
-        if "evidence_type" not in item or "description" not in item:
+        if not isinstance(item, dict) or "evidence_type" not in item or "description" not in item:
             return 0, "Each evidence item requires evidence_type and description"
+        url_error = url_fields_error("evidence", item)
+        if url_error:
+            return 0, f"Evidence {url_error}"
 
         file_bytes = None
         if "file_data" in item and isinstance(item["file_data"], str):
@@ -1037,7 +1520,9 @@ def _create_evidence_items(items, test_record_id):
                 file_bytes = base64.b64decode(item["file_data"])
             except Exception:
                 return 0, "Invalid base64 in evidence file_data"
+        decoded.append((item, file_bytes))
 
+    for item, file_bytes in decoded:
         ev = Evidence(
             id=str(uuid.uuid4()),
             test_record_id=test_record_id,
@@ -1088,6 +1573,7 @@ def _apply_execution(test, data):
 
 @api_bp.route("/tests/<test_id>/record-execution", methods=["POST"])
 @require_api_key
+@require_writer
 def record_execution(test_id):
     """Record the result of an externally-performed test execution.
     ---
@@ -1184,6 +1670,7 @@ def record_execution(test_id):
 
 @api_bp.route("/tests/batch-record-execution", methods=["POST"])
 @require_api_key
+@require_writer
 def batch_record_execution():
     """Record execution results for multiple tests in one call.
     ---
@@ -1270,6 +1757,7 @@ def batch_record_execution():
 
 @api_bp.route("/evidence/batch-submit", methods=["POST"])
 @require_api_key
+@require_writer
 def batch_submit_evidence():
     """Submit evidence for multiple tests in one call.
     ---
@@ -1528,5 +2016,4 @@ def openapi_spec():
         description: OpenAPI 3.0 specification
     """
     from flask import current_app
-    spec = current_app.extensions.get("swagger").get_apispecs()
-    return jsonify(spec)
+    return jsonify(current_app.swag.get_apispecs())

@@ -5,7 +5,7 @@ This guide walks you through setting up the CLAUDE.md and AGENTS.md governance d
 ## Prerequisites
 
 - **Trust Portal** deployed and running (see the main README)
-- **KanbanZone** account with a board for tracking work
+- **Task board** (any work-tracking tool your agents can reach through an API) for tracking work items
 - **Claude Code** installed on your development machine
 - **Git** repositories for your platform's codebase
 
@@ -112,79 +112,42 @@ Fill in the Repository Map table with every repo in your development environment
 | **my-slack-bot** | Python/Flask | Slack integration |
 ```
 
-## Step 5: Set Up KanbanZone Integration
+## Step 5: Connect Your Task Board
 
-1. Get your KanbanZone API key from Settings > Organization Settings > Integrations
-2. Create a `.env` file in `$WORKSPACE`:
+1. Create an API credential for your task board
+2. Add the board's credentials to a `.env` file in `$WORKSPACE`, for example:
 
 ```bash
-KANBANZONE_API_KEY=your-api-key
-KANBANZONE_BOARD_ID=your-board-public-id
+TASK_BOARD_API_KEY=your-api-key
+TASK_BOARD_ID=your-board-id
 ```
 
-3. Install the `kanban-zone` Claude Skill (follow the skill's setup instructions)
+3. Install the agent integration for your task board (a skill, MCP server or CLI that reads these variables) and name it in the "Task Board Access" section of CLAUDE.md and AGENTS.md
 
-The governance documents reference KanbanZone for card workflow, and the Trust Portal evidence chain tracks approved plans on KanbanZone cards.
+The governance documents reference the task board for the work item workflow, and the Trust Portal evidence chain tracks approved plans on work items.
 
 ## Step 6: Set Up the Decision Log Hook
 
-The decision log captures every Claude Code session as formal compliance evidence. Set up the SessionEnd hook:
+The decision log captures every Claude Code session as formal compliance evidence.
 
-1. Create the hooks directory:
+Every session transcript is uploaded to the trust portal by the SessionEnd hook that ships with the portal (`scripts/session-end-hook.sh`). It posts the transcript to `POST /api/decision-log/upload` and, when the portal is unreachable, keeps a copy under `decision-logs/.retry/` for a later upload.
+
+1. Copy the hook into your governance repository:
 
 ```bash
 mkdir -p "$WORKSPACE/.claude/hooks"
+cp "$WORKSPACE/trust-portal/scripts/session-end-hook.sh" "$WORKSPACE/.claude/hooks/"
+chmod +x "$WORKSPACE/.claude/hooks/session-end-hook.sh"
 ```
 
-2. Create the export script at `$WORKSPACE/.claude/hooks/export-session.sh`:
+2. Give it the portal URL and an agent API key (issued in the portal under Admin > Team Members), for example in your shell profile:
 
 ```bash
-#!/bin/bash
-set -e
-
-# Read session metadata from stdin
-read -r INPUT
-SESSION_ID=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id',''))")
-TRANSCRIPT=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('transcript_path',''))")
-CWD=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('cwd',''))")
-REASON=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('reason',''))")
-
-# Only capture sessions from the workspace root, two levels above this script
-DEV_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
-if [[ "$CWD" != "$DEV_DIR"* ]]; then
-    exit 0
-fi
-
-# Skip if no transcript
-if [ -z "$TRANSCRIPT" ] || [ ! -f "$TRANSCRIPT" ]; then
-    exit 0
-fi
-
-# Copy transcript to trust-portal decision-logs/
-DEST_DIR="$DEV_DIR/trust-portal/decision-logs"
-mkdir -p "$DEST_DIR"
-
-TIMESTAMP=$(date -u +"%Y-%m-%dT%H%M%SZ")
-cp "$TRANSCRIPT" "$DEST_DIR/${TIMESTAMP}_${SESSION_ID}.jsonl"
-
-# Write metadata sidecar
-cat > "$DEST_DIR/${TIMESTAMP}_${SESSION_ID}.meta.json" << METAEOF
-{
-    "session_id": "$SESSION_ID",
-    "cwd": "$CWD",
-    "reason": "$REASON",
-    "captured_at": "$TIMESTAMP"
-}
-METAEOF
+export TRUST_PORTAL_API_URL=https://trust.example.com
+export TRUST_PORTAL_API_KEY=<agent API key>
 ```
 
-3. Make it executable:
-
-```bash
-chmod +x "$WORKSPACE/.claude/hooks/export-session.sh"
-```
-
-4. Configure Claude Code to use the hook. Create or update `$WORKSPACE/.claude/settings.json`:
+3. Configure Claude Code to run it at session end. Create or update `$WORKSPACE/.claude/settings.json` (hook timeouts are in seconds):
 
 ```json
 {
@@ -194,8 +157,8 @@ chmod +x "$WORKSPACE/.claude/hooks/export-session.sh"
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "/path/to/your/workspace/.claude/hooks/export-session.sh",
-                        "timeout": 5000
+                        "command": "/path/to/your/workspace/.claude/hooks/session-end-hook.sh",
+                        "timeout": 60
                     }
                 ]
             }
@@ -218,8 +181,8 @@ git commit -m "Add AI agent governance documents for SOC 2 compliance"
 
 Verify the setup by starting a Claude Code session in `$WORKSPACE` and asking it to:
 1. Read the CLAUDE.md and confirm it understands the conventions
-2. Check that the KanbanZone skill can access your board
-3. End the session and verify a transcript appears in `trust-portal/decision-logs/`
+2. Check that the task-board integration can read a work item on your board
+3. End the session and verify the session appears in the portal (`GET /api/decision-log/sessions`)
 
 ## Ongoing Maintenance
 

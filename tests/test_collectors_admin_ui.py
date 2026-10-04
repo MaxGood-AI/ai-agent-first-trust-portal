@@ -9,7 +9,8 @@ from moto import mock_aws
 from app import create_app
 from app.config import TestConfig
 from app.models import CollectorConfig, CollectorRun, db
-from app.services import team_service
+from app.services import scheduler, team_service
+from tests.conftest import login
 
 
 @pytest.fixture
@@ -44,8 +45,7 @@ def non_admin(app_ctx):
 
 
 def _login(client, member):
-    with client.session_transaction() as sess:
-        sess["api_key"] = member.api_key
+    login(client, member)
 
 
 def _login_admin(client, admin):
@@ -321,7 +321,8 @@ def test_runs_page_shows_real_run_from_end_to_end(client, admin):
     )
     # Trigger via the API endpoint (same code path as the "Run Now" button)
     resp = client.post("/api/collectors/aws/run")
-    assert resp.status_code == 200
+    assert resp.status_code == 202
+    assert scheduler.dispatch_once() == 1
 
     resp = client.get("/admin/collectors/aws/runs")
     assert resp.status_code == 200
@@ -343,6 +344,7 @@ def test_run_detail_page_shows_checks(client, admin):
     )
     resp = client.post("/api/collectors/aws/run")
     run_id = resp.get_json()["id"]
+    scheduler.dispatch_once()
 
     resp = client.get(f"/admin/collectors/aws/runs/{run_id}")
     assert resp.status_code == 200

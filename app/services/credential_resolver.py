@@ -5,15 +5,17 @@ collectors) or a generic credentials dict (for non-AWS collectors).
 
 Supports three v1 credential modes:
 
-- ``task_role``: use the default boto3 credential chain (ECS task role,
-  EC2 instance role, env vars, shared config). Nothing is stored.
-- ``task_role_assume``: use the default chain to call ``sts:AssumeRole``
-  on a configured target role ARN. Short-lived credentials are cached
-  until expiry.
-- ``access_keys``: use stored (Fernet-encrypted) access key + secret
-  (+ optional session token).
-
-Cross-account assume-role is explicitly out of v1 scope.
+- ``task_role``: use the portal's runtime AWS session
+  (``app.services.aws_session.get_session``: the runtime role assumed from
+  the base credentials, or the default boto3 chain). Nothing is stored.
+- ``task_role_assume``: from the runtime session, call ``sts:AssumeRole``
+  on a configured target role ARN (optional external id). The resulting
+  credentials refresh automatically.
+- ``access_keys``: use stored (Fernet-encrypted) credentials. AWS
+  collectors store ``access_key_id`` + ``secret_access_key`` (+ optional
+  ``session_token``); non-AWS collectors (e.g. the platform collector) store
+  their own keys such as ``bearer_token`` or ``basic_user``/``basic_password``,
+  which are returned as ``raw`` without building an AWS session.
 """
 
 import logging
@@ -28,6 +30,9 @@ logger = logging.getLogger(__name__)
 
 
 SUPPORTED_MODES = {"task_role", "task_role_assume", "access_keys", "none"}
+
+# Stored credential keys used by non-AWS collectors in access_keys mode.
+GENERIC_CREDENTIAL_KEYS = ("bearer_token", "basic_user", "basic_password")
 
 
 class CredentialResolutionError(Exception):
@@ -97,23 +102,13 @@ class CredentialResolver:
     # ----- mode handlers -----
 
     def _resolve_task_role(self, config: CollectorConfig) -> ResolvedCredentials:
-        try:
-            import boto3
-        except ImportError as exc:
-            raise CredentialResolutionError(
-                "boto3 is not installed; cannot resolve task_role credentials"
-            ) from exc
+        from app.services.aws_session import get_session
+
         region = (config.config or {}).get("region")
-        session = boto3.Session(region_name=region) if region else boto3.Session()
-        return ResolvedCredentials(mode="task_role", boto_session=session)
+        return ResolvedCredentials(mode="task_role", boto_session=get_session(region))
 
     def _resolve_assume_role(self, config: CollectorConfig) -> ResolvedCredentials:
-        try:
-            import boto3
-        except ImportError as exc:
-            raise CredentialResolutionError(
-                "boto3 is not installed; cannot resolve task_role_assume credentials"
-            ) from exc
+        from app.services.aws_session import get_session, session_with_refreshable_role
 
         creds = decrypt_credentials(config.encrypted_credentials)
         role_arn = creds.get("role_arn")
@@ -121,70 +116,44 @@ class CredentialResolver:
             raise CredentialResolutionError(
                 f"task_role_assume mode requires role_arn; none set for collector {config.name}"
             )
-        external_id = creds.get("external_id")
-        session_name = creds.get("session_name") or f"trust-portal-{config.name}"
         region = (config.config or {}).get("region")
-
-        base_session = boto3.Session(region_name=region) if region else boto3.Session()
-        sts = base_session.client("sts")
-        assume_kwargs = {
-            "RoleArn": role_arn,
-            "RoleSessionName": session_name,
-            "DurationSeconds": 3600,
-        }
-        if external_id:
-            assume_kwargs["ExternalId"] = external_id
-
+        session = session_with_refreshable_role(
+            get_session(region),
+            role_arn,
+            external_id=creds.get("external_id"),
+            session_name=creds.get("session_name") or f"trust-portal-{config.name}",
+            region=region,
+        )
+        # Fail fast with a clear error rather than on the collector's first call.
         try:
-            response = sts.assume_role(**assume_kwargs)
+            frozen = session.get_credentials().get_frozen_credentials()
         except Exception as exc:  # boto errors vary; normalize
             raise CredentialResolutionError(
                 f"sts:AssumeRole failed for {role_arn}: {exc}"
             ) from exc
-
-        c = response["Credentials"]
-        assumed_session = boto3.Session(
-            aws_access_key_id=c["AccessKeyId"],
-            aws_secret_access_key=c["SecretAccessKey"],
-            aws_session_token=c["SessionToken"],
-            region_name=region,
-        )
-        expires_at = c["Expiration"]
-        if expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=timezone.utc)
-
-        return ResolvedCredentials(
-            mode="task_role_assume",
-            boto_session=assumed_session,
-            expires_at=expires_at,
-        )
+        if not frozen.access_key:
+            raise CredentialResolutionError(f"sts:AssumeRole returned no credentials for {role_arn}")
+        return ResolvedCredentials(mode="task_role_assume", boto_session=session)
 
     def _resolve_access_keys(self, config: CollectorConfig) -> ResolvedCredentials:
         creds = decrypt_credentials(config.encrypted_credentials)
         access_key = creds.get("access_key_id")
         secret_key = creds.get("secret_access_key")
+        if not access_key and not secret_key and any(key in creds for key in GENERIC_CREDENTIAL_KEYS):
+            # Non-AWS collector (bearer / basic auth): hand the collector its secrets.
+            return ResolvedCredentials(mode="access_keys", raw=creds)
         if not access_key or not secret_key:
             raise CredentialResolutionError(
                 f"access_keys mode requires access_key_id and secret_access_key "
-                f"for collector {config.name}"
+                f"(or bearer_token / basic_user and basic_password) for collector {config.name}"
             )
-        session_token = creds.get("session_token")
+        import boto3
+
         region = creds.get("region") or (config.config or {}).get("region")
-
-        try:
-            import boto3
-        except ImportError:
-            # Non-AWS collector using generic credentials
-            return ResolvedCredentials(mode="access_keys", raw=creds)
-
         boto_session = boto3.Session(
             aws_access_key_id=access_key,
             aws_secret_access_key=secret_key,
-            aws_session_token=session_token,
+            aws_session_token=creds.get("session_token"),
             region_name=region,
         )
-        return ResolvedCredentials(
-            mode="access_keys",
-            boto_session=boto_session,
-            raw=creds,
-        )
+        return ResolvedCredentials(mode="access_keys", boto_session=boto_session, raw=creds)

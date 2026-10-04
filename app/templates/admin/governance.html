@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Governance Documents{% endblock %}
+
+{% block content %}
+<h1>Governance Documents</h1>
+<p><a href="{{ url_for('admin.dashboard') }}">&larr; Back to Dashboard</a> &middot; <a href="{{ url_for('admin_git.governance_changes') }}">Change history</a></p>
+<p>Files synced from governance git sources. Each version is stored with the commit that introduced it and its SHA-256.</p>
+
+{% if files %}
+<table class="data-table">
+    <thead><tr><th>Source</th><th>Path</th><th>Kind</th><th>Status</th><th>Current commit</th><th>SHA-256</th><th>Synced</th></tr></thead>
+    <tbody>
+        {% for f, s, v in files %}
+        <tr class="{{ 'inactive' if f.status == 'deleted' }}">
+            <td>{{ s.name }}</td>
+            <td><a href="{{ url_for('admin_git.governance_file', file_id=f.id) }}"><code>{{ f.path }}</code></a></td>
+            <td>{{ f.kind | replace('_', ' ') }}</td>
+            <td>{{ f.status }}</td>
+            <td><code>{{ (v.commit_id if v else '')[:12] }}</code></td>
+            <td><code>{{ (v.sha256 if v else '')[:12] }}</code></td>
+            <td>{{ v.created_at.strftime('%Y-%m-%d %H:%M') if v else '' }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>No governance documents yet. Add a governance git source and sync it.</p>
+{% endif %}
+{% endblock %}

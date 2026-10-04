@@ -6,7 +6,7 @@ Accepted (2026-04-05)
 
 ## Context
 
-The trust portal needed a clear system of record for compliance data. The portal manages controls, tests, policies, evidence, systems, vendors, risks, and pentest findings. These records were initially seeded from JSON files in the MGDataAndEvidence repository, but a decision was needed about where the authoritative version of this data lives going forward.
+The trust portal needed a clear system of record for compliance data. The portal manages controls, tests, policies, evidence, systems, vendors, risks, and pentest findings. These records were initially seeded from JSON files in the evidence repository, but a decision was needed about where the authoritative version of this data lives going forward.
 
 Five options were evaluated:
 
@@ -31,7 +31,7 @@ Five options were evaluated:
 - **Audit logging via PostgreSQL triggers** provides tamper-evident, attributed change tracking without application-level complexity
 - **API-first architecture** enables AI agent integration via the trust-portal compliance skill
 - **Single source of truth** eliminates sync conflicts between git and database
-- **JSON seed files** (MGDataAndEvidence) still serve as bootstrap data for new deployments via the `cli init` command
+- **JSON seed files** in the evidence repository still serve as bootstrap data for new deployments via the `cli init` command
 - **Optional periodic export** (`cli export`, planned) can generate git-tracked backups
 - **Role-based access** (admin, agent, client) is naturally expressed through the API and team member model
 
@@ -39,7 +39,7 @@ Five options were evaluated:
 
 - All compliance data changes must flow through the API (or admin UI, which uses the same database)
 - The `cli init --data-dir` command is for bootstrapping only, not ongoing synchronization
-- MGDataAndEvidence becomes a seed/backup repository, not the live system of record
+- The evidence repository becomes a seed/backup repository, not the live system of record
 - AI agents interact via the compliance skill (not direct file editing)
 - The `audit_log` table replaces git history as the change tracking mechanism for compliance data
 - Every data change is attributed to a team member via the `changed_by` field

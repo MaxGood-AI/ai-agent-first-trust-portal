@@ -25,7 +25,7 @@ def test_create_human_member(app_ctx):
     assert member.role == "human"
     assert member.is_active is True
     assert member.is_compliance_admin is False
-    assert len(member.api_key) > 0
+    assert len(member.issued_api_key) > 0
     assert member.id is not None
 
 
@@ -44,13 +44,13 @@ def test_create_compliance_admin(app_ctx):
 def test_api_key_uniqueness(app_ctx):
     m1 = team_service.create_member("A", "a@example.com", "human")
     m2 = team_service.create_member("B", "b@example.com", "human")
-    assert m1.api_key != m2.api_key
+    assert m1.issued_api_key != m2.issued_api_key
 
 
 def test_api_key_format(app_ctx):
     member = team_service.create_member("Test", "test@example.com", "human")
     # secrets.token_urlsafe(32) produces 43-character base64url string
-    assert len(member.api_key) == 43
+    assert len(member.issued_api_key) == 43
 
 
 def test_list_members_excludes_inactive(app_ctx):
@@ -85,10 +85,10 @@ def test_deactivate_nonexistent(app_ctx):
 
 def test_regenerate_key(app_ctx):
     member = team_service.create_member("Test", "test@example.com", "human")
-    old_key = member.api_key
+    old_key = member.issued_api_key
     result = team_service.regenerate_key(member.id)
-    assert result.api_key != old_key
-    assert len(result.api_key) == 43
+    assert result.issued_api_key != old_key
+    assert len(result.issued_api_key) == 43
 
 
 def test_regenerate_key_nonexistent(app_ctx):

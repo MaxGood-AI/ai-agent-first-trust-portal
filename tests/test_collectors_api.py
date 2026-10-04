@@ -7,7 +7,7 @@ from moto import mock_aws
 from app import create_app
 from app.config import TestConfig
 from app.models import CollectorConfig, db
-from app.services import team_service
+from app.services import scheduler, team_service
 
 
 @pytest.fixture
@@ -34,13 +34,13 @@ def admin_headers(app_ctx):
     admin = team_service.create_member(
         "Admin", "admin@example.com", "human", is_compliance_admin=True
     )
-    return {"X-API-Key": admin.api_key}
+    return {"X-API-Key": admin.issued_api_key}
 
 
 @pytest.fixture
 def user_headers(app_ctx):
     user = team_service.create_member("User", "user@example.com", "human")
-    return {"X-API-Key": user.api_key}
+    return {"X-API-Key": user.issued_api_key}
 
 
 def test_list_collectors_empty(client, admin_headers):
@@ -193,9 +193,13 @@ def test_trigger_run_executes_and_finishes(client, admin_headers):
         json={"credential_mode": "task_role", "config": {"region": "us-east-1"}},
     )
     resp = client.post("/api/collectors/aws/run", headers=admin_headers)
-    assert resp.status_code == 200
-    run_data = resp.get_json()
-    assert run_data["trigger_type"] == "manual"
+    assert resp.status_code == 202
+    queued = resp.get_json()
+    assert queued["trigger_type"] == "manual"
+    assert queued["status"] == "queued"
+
+    assert scheduler.dispatch_once() == 1
+    run_data = client.get(queued["poll_url"], headers=admin_headers).get_json()["run"]
     assert run_data["status"] in ("success", "partial", "failure")
     assert run_data["finished_at"] is not None
 
@@ -213,6 +217,7 @@ def test_get_run_detail_includes_checks(client, admin_headers):
     )
     resp = client.post("/api/collectors/aws/run", headers=admin_headers)
     run_id = resp.get_json()["id"]
+    scheduler.dispatch_once()
 
     resp = client.get(f"/api/collectors/runs/{run_id}", headers=admin_headers)
     assert resp.status_code == 200

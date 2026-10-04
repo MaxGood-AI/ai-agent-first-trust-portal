@@ -12,7 +12,7 @@ from app.models.evidence import Evidence
 from app.models.test_record import TestRecord
 from app.models.risk_register import RiskRegister
 from app.models.pentest_finding import PentestFinding
-from app.models.decision_log import DecisionLogSession, DecisionLogEntry
+from app.models.decision_log import DecisionLogSession, DecisionLogEntry, DecisionLogTranscript
 from app.models.policy_version import PolicyVersion
 from app.models.team_member import TeamMember
 from app.models.audit_log import AuditLog
@@ -20,11 +20,17 @@ from app.models.portal_settings import PortalSettings
 from app.models.collector_config import CollectorConfig
 from app.models.collector_run import CollectorRun
 from app.models.collector_check_result import CollectorCheckResult
+from app.models.auth_rate_limit import AuthRateLimitWindow
+from app.models.git_source import GitSource, GitSourceFile, GitFileVersion, GitCommit, GitSyncRun
+from app.models.audit_witness import AuditWitnessArming, AuditWitnessPublication
 
 __all__ = [
     "db", "Control", "System", "Vendor", "vendor_systems", "Policy", "policy_controls",
     "Evidence", "TestRecord", "RiskRegister", "PentestFinding",
-    "DecisionLogSession", "DecisionLogEntry", "PolicyVersion", "TeamMember",
+    "DecisionLogSession", "DecisionLogEntry", "DecisionLogTranscript", "PolicyVersion", "TeamMember",
     "AuditLog", "PortalSettings",
     "CollectorConfig", "CollectorRun", "CollectorCheckResult",
+    "AuthRateLimitWindow",
+    "GitSource", "GitSourceFile", "GitFileVersion", "GitCommit", "GitSyncRun",
+    "AuditWitnessArming", "AuditWitnessPublication",
 ]

@@ -27,7 +27,7 @@ def client(app):
 def auth_headers(app):
     with app.app_context():
         member = team_service.create_member("API User", "api@test.com", "human")
-        return {"X-API-Key": member.api_key}
+        return {"X-API-Key": member.issued_api_key}
 
 
 def test_crud_list_controls(client, auth_headers, app):

@@ -9,6 +9,7 @@ from app.config import TestConfig
 from app.models import db, Control, TestRecord, Evidence
 from app.models.audit_log import AuditLog
 from app.services import team_service
+from tests.conftest import login
 
 
 @pytest.fixture
@@ -30,7 +31,7 @@ def client(app):
 def auth_headers(app):
     with app.app_context():
         member = team_service.create_member("Test User", "test@test.com", "human")
-        return {"X-API-Key": member.api_key}
+        return {"X-API-Key": member.issued_api_key}
 
 
 @pytest.fixture
@@ -497,8 +498,7 @@ class TestAdminEvidenceUI:
             member = team_service.create_member(
                 "Admin", "admin@test.com", "human", is_compliance_admin=True
             )
-            with client.session_transaction() as sess:
-                sess["api_key"] = member.api_key
+            login(client, member)
             return member
 
     def test_evidence_page_loads(self, client, admin_session, test_record):

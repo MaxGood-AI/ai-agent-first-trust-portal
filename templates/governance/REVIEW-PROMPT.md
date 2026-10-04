@@ -1,19 +1,19 @@
 # Independent Code Review Prompt Template
 
-This prompt is used by the main AI agent (e.g., Claude Code) to invoke an independent review agent (e.g., OpenAI Codex) as an automated step in the KanbanZone Card Workflow.
+This prompt is used by the main AI agent (e.g., Claude Code) to invoke an independent review agent (e.g., OpenAI Codex) as an automated step in the Work Item Workflow.
 
-The main agent substitutes `{{ CARD_NUMBER }}`, `{{ BOARD_URL }}`, and `{{ REPO_LIST }}` before invoking the review agent.
+The main agent substitutes `{{ WORK_ITEM_ID }}`, `{{ WORK_ITEM_URL }}`, and `{{ REPO_LIST }}` before invoking the review agent.
 
 ---
 
 ## Prompt
 
 ```
-Please analyze all the changes in {{ REPO_LIST }} related to card #{{ CARD_NUMBER }}, BUT DO NOT make any further changes yourself.
+Please analyze all the changes in {{ REPO_LIST }} related to work item {{ WORK_ITEM_ID }}, BUT DO NOT make any further changes yourself.
 
 Your analysis should check:
 
-1. **Functionality** — new functionality looks correct and complete relative to the approved plan on the card
+1. **Functionality** — new functionality looks correct and complete relative to the approved plan on the work item
 2. **Refactoring** — any refactoring looks complete and correct; no dead code, no orphaned references
 3. **Cross-repo consistency** — references between repos are consistent (API contracts, shared types, environment variables)
 4. **Security** — no committed secrets, no hardcoded credentials, no OWASP top 10 vulnerabilities (injection, XSS, etc.), no unsafe input handling
@@ -26,7 +26,7 @@ This is a complete static and dynamic analysis of all current uncommitted change
 
 Your report should be detailed and actionable with clear file:line references. Include a final **VERDICT: PASS** or **VERDICT: FAIL** with a summary of any blocking issues.
 
-Emit this report by appending a `### Independent Code Review` section to card #{{ CARD_NUMBER }} on the KanbanZone board at {{ BOARD_URL }}.
+Emit this report by appending a `### Independent Code Review` section to work item {{ WORK_ITEM_ID }} at {{ WORK_ITEM_URL }}.
 ```
 
 ---
@@ -35,18 +35,18 @@ Emit this report by appending a `### Independent Code Review` section to card #{
 
 | Placeholder | Description | Example |
 |-------------|-------------|---------|
-| `{{ CARD_NUMBER }}` | The KanbanZone card number being worked on | `461` |
-| `{{ BOARD_URL }}` | The KanbanZone board URL | `https://kanbanzone.io/b/QJxJGohF` |
+| `{{ WORK_ITEM_ID }}` | The id of the work item on the task board | `461` |
+| `{{ WORK_ITEM_URL }}` | The work item's URL on the task board | `https://tasks.example.com/items/461` |
 | `{{ REPO_LIST }}` | Repos with changes, or "all repos" | `./MyBackend and ./MyFrontend` |
 
 ## How the Main Agent Uses This
 
-After the user accepts the completed work (step 6 of the card workflow), the main agent:
+After the user accepts the completed work (step 6 of the work item workflow), the main agent:
 
 1. Reads this prompt template
 2. Substitutes the placeholders with actual values
 3. Invokes the review agent CLI (e.g., `codex --prompt "<composed prompt>"`)
-4. Waits for the review agent to complete and append findings to the card
-5. Reads the card to check the verdict
+4. Waits for the review agent to complete and append findings to the work item
+5. Reads the work item to check the verdict
 6. If **VERDICT: PASS** — proceeds to commit
 7. If **VERDICT: FAIL** — presents the blocking issues to the user for resolution before retrying
