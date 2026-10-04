@@ -62,7 +62,7 @@ tests/                Unit tests (pytest)
 - **Auto-migration**: database schema is applied automatically via `alembic upgrade head` on container startup. New model changes require a new Alembic migration.
 - **Policies are markdown files** in `policies/` — versioned in git, rendered by the portal
 - **Evidence artifacts** (screenshots, exports) go in `evidence-artifacts/` which is gitignored — only metadata/links are tracked in the database
-- **Decision logs** (session transcripts) are uploaded directly to the portal via `POST /api/decision-log/upload`, or land in `decision-logs/` for batch ingest. The SessionEnd hook in `scripts/session-end-hook.sh` handles automatic upload with offline fallback.
+- **Decision logs** (session transcripts) are uploaded directly to the portal via `POST /api/decision-log/upload`, or land in `decision-logs/` for batch ingest. The SessionEnd hook in `scripts/session-end-hook.sh` handles automatic upload with offline fallback. `app/services/transcript_ingest.py` parses Claude Code JSONL (also written by openclaude) and Codex rollout JSONL, detecting the format from the records, and labels each session's `agent_type` with the uploader's `agent` (upload parameter or `.meta.json` sidecar field) or, without one, the detected format's agent.
 - **Collectors** are idempotent scripts that can be run on a schedule to gather fresh evidence
 - Port **5100** for the trust portal
 

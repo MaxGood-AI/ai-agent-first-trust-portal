@@ -550,6 +550,11 @@ def ingest_decision_logs():
 @require_api_key
 def upload_decision_log():
     """Upload a JSONL decision log transcript directly.
+
+    The body is a Claude Code (or openclaude) JSONL transcript or a Codex
+    rollout JSONL; the format is detected from the records. The session's
+    `agent_type` is the `agent` parameter when given, otherwise the
+    detected format's agent (`codex` or `claude_code`).
     ---
     tags:
       - Decision Log
@@ -568,13 +573,24 @@ def upload_decision_log():
         schema:
           type: string
         description: Session exit reason.
+      - name: agent
+        in: query
+        required: false
+        schema:
+          type: string
+          example: codex
+        description: >
+          Agent CLI that wrote the transcript, e.g. claude-code, openclaude or
+          codex. Stored lower-cased with hyphens as underscores (claude-code
+          is stored as claude_code); letters, digits, '-' and '_' only, at
+          most 50 characters. Detected from the transcript format if omitted.
     requestBody:
       required: true
       content:
         application/jsonl:
           schema:
             type: string
-            description: JSONL transcript content
+            description: JSONL transcript content (Claude Code, openclaude or Codex rollout format)
     responses:
       200:
         description: Session ingested successfully
@@ -587,8 +603,11 @@ def upload_decision_log():
                   type: string
                 entries:
                   type: integer
+                agent_type:
+                  type: string
+                  example: codex
       400:
-        description: Empty content or duplicate session
+        description: Empty content, invalid agent, or duplicate session
       401:
         description: Missing or invalid API key
     """
@@ -596,22 +615,34 @@ def upload_decision_log():
     if not content or not content.strip():
         return jsonify({"error": "Empty request body"}), 400
 
+    from app.services.transcript_ingest import ingest_from_content, normalize_agent_type
+
+    agent = request.args.get("agent")
+    agent_type = None
+    if agent:
+        agent_type = normalize_agent_type(agent)
+        if agent_type is None:
+            return jsonify({
+                "error": "Invalid agent: use letters, digits, '-' or '_', at most 50 characters",
+            }), 400
+
     session_id = request.args.get("session_id") or str(uuid.uuid4())
     exit_reason = request.args.get("exit_reason")
 
-    from app.services.transcript_ingest import ingest_from_content
     session = ingest_from_content(
         content=content,
         session_id=session_id,
         submitted_by=g.current_team_member.id,
         exit_reason=exit_reason,
+        agent_type=agent_type,
     )
 
     if session is None:
         return jsonify({"error": "Session already exists", "session_id": session_id}), 400
 
     entry_count = session.interactions.count()
-    return jsonify({"session_id": session.id, "entries": entry_count})
+    return jsonify({"session_id": session.id, "entries": entry_count,
+                    "agent_type": session.agent_type})
 
 
 @api_bp.route("/decision-log/sessions")

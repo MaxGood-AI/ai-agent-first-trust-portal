@@ -6,7 +6,7 @@ A self-contained, white-label **SOC 2 trust portal and compliance management sys
 
 Built for small teams that use **Claude Code** as part of their development workflow. The portal provides the structure; your AI agents do the work.
 
-> **Supported AI agent: Claude Code.** The session-driven parts of the evidence chain (auto-pull of repos at session start, decision-log capture at session end, banner-style status reporting to the user) rely on hooks that surface output to the user. OpenAI Codex CLI (v0.125.0) does not display hook output (`systemMessage` / `additionalContext`) to the user in either `codex exec` or the TUI, so Codex is not a supported driver for these flows. OpenAI Codex is used inside the Claude Code workflow for the independent pre-commit RED-team review (see the Codex Review Protocol in the governance templates).
+> **Supported AI agent: Claude Code.** The session-driven parts of the evidence chain (auto-pull of repos at session start, decision-log capture at session end, banner-style status reporting to the user) rely on hooks that surface output to the user. OpenAI Codex CLI (v0.125.0) does not display hook output (`systemMessage` / `additionalContext`) to the user in either `codex exec` or the TUI, so Codex is not a supported driver for these flows. The portal's decision-log ingest parses session transcripts from Claude Code, openclaude and OpenAI Codex alike, whichever hook or client uploads them (see [Decision Log Integration](#decision-log-integration)). OpenAI Codex is used inside the Claude Code workflow for the independent pre-commit RED-team review (see the Codex Review Protocol in the governance templates).
 
 **No compliance expertise required to get started.** The system ships with SOC 2 policy templates, automated evidence collectors, and an API designed for agent-first workflows — not clickthrough GUIs.
 
@@ -15,7 +15,7 @@ Built for small teams that use **Claude Code** as part of their development work
 ### Agent-First Compliance
 - **Full API for AI agents** — Every compliance operation (record test results, submit evidence, upload files, verify audit integrity) is available via REST API with API key auth
 - **Batch operations** — Record execution results and submit evidence for multiple tests in a single call
-- **Decision Log** — Automatically ingest AI agent session transcripts (Claude Code) as formal compliance audit trail
+- **Decision Log** — Automatically ingest AI agent session transcripts (Claude Code, openclaude, OpenAI Codex) as formal compliance audit trail, each session labelled with the agent that wrote it
 - **Tamper-evident audit log** — SHA-256 hash chain on every compliance data change, with a verification endpoint to prove integrity
 - **Claude Code skill** — Companion [trust-portal skill](https://github.com/MaxGood-AI/ai-agent-first-trust-portal-skill) provides CLI commands for all API operations
 
@@ -119,7 +119,7 @@ Interactive API documentation is served at `/api/docs/` (Swagger UI) and the raw
 | `/api/evidence/<id>/download` | GET | Download an evidence file |
 | `/api/audit-log` | GET | Query compliance data change history |
 | `/api/audit-log/verify` | GET | Verify audit log hash chain integrity |
-| `/api/decision-log/upload` | POST | Upload a session transcript |
+| `/api/decision-log/upload` | POST | Upload a session transcript (Claude Code, openclaude or Codex JSONL; optional `agent` label) |
 | `/api/decision-log/sessions` | GET | List ingested decision log sessions |
 | `/api/settings` | GET/PUT | Portal configuration |
 
@@ -286,10 +286,26 @@ Trust Portal can ingest AI agent session transcripts as formal compliance audit 
 
 ### How It Works
 
-1. **Claude Code SessionEnd hook** copies session transcripts to `decision-logs/`
-2. `POST /api/decision-log/ingest` parses the JSONL files and stores them in PostgreSQL
+1. A **SessionEnd hook** uploads each session transcript with `POST /api/decision-log/upload` (`scripts/session-end-hook.sh` is a ready-made Claude Code hook), or stages it in `decision-logs/` as `<timestamp>_<session-id>.jsonl`, optionally beside a `<timestamp>_<session-id>.meta.json` sidecar carrying `reason` and `agent`
+2. `POST /api/decision-log/ingest` parses the staged JSONL files and stores them in PostgreSQL
 3. The system automatically detects "done." verification acknowledgments (formal smoke test sign-offs)
 4. Sessions, entries, and verifications are queryable via the API
+
+### Transcript Formats and Agent Labels
+
+`app/services/transcript_ingest.py` detects the transcript format from its records:
+
+| Agent | Format | Stored as decision-log entries |
+|-------|--------|--------------------------------|
+| Claude Code | Claude Code JSONL | Every `user` and `assistant` record: its `text` blocks as the entry text, its `tool_use` blocks as the entry's tool calls |
+| openclaude | Claude Code JSONL | As Claude Code |
+| OpenAI Codex (TUI and `codex exec`) | Codex rollout JSONL (`session_meta`, `turn_context`, `response_item`, `event_msg` records) | Every `response_item` message with role `user` or `assistant`, with its text; every `response_item` tool call (`function_call`, `custom_tool_call`, `local_shell_call`, `web_search_call`, ...) as an assistant entry holding one `tool_use`-shaped tool call (`type`, `id`, `name`, `input`) |
+
+Thinking and reasoning, Codex developer messages, tool output and Codex `event_msg` records are not stored. A Codex session takes its working directory and git branch from `session_meta` and its model from the first `turn_context`.
+
+Each session's `agent_type` is the agent its uploader names: the upload's `agent` query parameter, or the sidecar's `agent` field for a staged file. It is stored lower-case with hyphens as underscores, so `claude-code` is stored as `claude_code`. A session uploaded without a named agent carries the detected format's agent: `codex` for a Codex rollout, `claude_code` for Claude Code JSONL. openclaude writes Claude Code JSONL, so an openclaude session carries the `openclaude` label when its uploader names it.
+
+Ingest is insert-only: a session whose ID is already stored keeps its stored entries and label, and uploading it again returns `400 Session already exists`.
 
 ### The "done." Protocol
 
