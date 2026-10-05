@@ -675,7 +675,7 @@ Resources:
             Statement:
               - Sid: CreateTaggedSnapshot
                 Effect: Allow
-                Action: lightsail:CreateRelationalDatabaseSnapshot
+                Action: [lightsail:CreateRelationalDatabaseSnapshot, lightsail:TagResource]
                 Resource: '*'
                 Condition:
                   StringEquals: {'aws:RequestTag/trust-portal-stack': !Select [2, !Split ['/', !Ref 'AWS::StackId']]}

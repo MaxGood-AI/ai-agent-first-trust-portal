@@ -504,6 +504,14 @@ class LightsailScopeTests(unittest.TestCase):
         self.assertIn('[{key: "trust-portal-stack", value: $value}]', DEPLOY_SH)
         self.assertIn('--tags "$SNAPSHOT_TAGS"', DEPLOY_SH)
 
+    def test_tagged_snapshot_creates_may_tag_on_create(self):
+        # Lightsail authorizes the --tags of a create as lightsail:TagResource; without it the
+        # tag-conditioned create is denied.
+        for role, sid in ((resource_block("SnapshotRole"), "CreateTaggedSnapshot"),
+                          (resource_block("DeployRole", PIPELINE_LINES), "SnapshotBeforeDeploy")):
+            self.assertIn("Action: [lightsail:CreateRelationalDatabaseSnapshot, lightsail:TagResource]",
+                          statement_block(role, sid))
+
     def test_deploy_role_is_scoped_to_the_core_stack(self):
         role = resource_block("DeployRole", PIPELINE_LINES)
         self.assertIn("Resource: !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:"

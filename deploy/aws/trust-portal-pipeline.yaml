@@ -203,7 +203,7 @@ Resources:
                   - {'Fn::ImportValue': !Sub '${CoreStackName}-OwnerSecretArn'}
               - Sid: SnapshotBeforeDeploy
                 Effect: Allow
-                Action: lightsail:CreateRelationalDatabaseSnapshot
+                Action: [lightsail:CreateRelationalDatabaseSnapshot, lightsail:TagResource]
                 Resource: '*'
                 Condition:
                   StringEquals: {'aws:RequestTag/trust-portal-stack': {'Fn::ImportValue': !Sub '${CoreStackName}-SnapshotTagValue'}}
