@@ -29,8 +29,8 @@ Each `Sid` maps to one service, all read-only:
 - `TrustPortalCollectorRDSReadOnly` — database instances
 - `TrustPortalCollectorS3ReadOnly` — bucket list, default encryption, versioning, public access block
 - `TrustPortalCollectorCloudTrailReadOnly` — trails and trail status
-- `TrustPortalCollectorCodeCommitList` — repository list and approval rule templates (git collector)
-- `TrustPortalCollectorCodeCommitRepositories` — per-repository approval rules and pull requests (git collector)
+- `TrustPortalCollectorCodeCommitList` — repository list (git collector)
+- `TrustPortalCollectorCodeCommitRepositories` — each repository's default branch and its commits (git collector)
 
 Removing a statement removes that coverage; the matching checks then report
 `skipped` or `error` and the portal keeps running.

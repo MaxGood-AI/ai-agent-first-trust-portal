@@ -200,7 +200,19 @@
         </p>
     </div>
     <div class="form-row">
-        <label for="lookback_days">Pull-request lookback window (days)</label>
+        <label for="exclude_repositories">Repositories excluded from change management (optional)</label>
+        <textarea id="exclude_repositories" name="exclude_repositories" rows="3"
+                  placeholder="One repository name per line.">{{ ((config.config or {}).get('exclude_repositories') or []) | join('\n') if config else '' }}</textarea>
+        <p class="help-text">
+            The repositories your risk register designates as neither customer-facing
+            nor processing customer data.
+            Every other repository in scope is checked: each commit on its default
+            branch carries <code>## Problem</code>, <code>## Solution</code> and
+            <code>## Verified</code> sections.
+        </p>
+    </div>
+    <div class="form-row">
+        <label for="lookback_days">Change-management lookback window (days)</label>
         <input type="number" id="lookback_days" name="lookback_days" min="1" max="365"
                value="{{ (config.config or {}).get('lookback_days', 30) if config else 30 }}">
     </div>

@@ -20,6 +20,10 @@ This policy governs how changes to [Organization Name]'s production systems, cod
 
 This policy applies to [all changes to production systems / all code changes regardless of environment / describe actual scope].
 
+### Repository Scope
+
+Every repository holding code of a customer-facing system or of a system that processes customer data is in scope. The repositories the risk register designates as neither customer-facing nor processing customer data are out of scope: [list them, or "none"].
+
 ### Change Types
 
 | Change Type | Examples | Covered by This Policy? |
@@ -54,23 +58,21 @@ Every change request must include:
 
 ### Approval Process
 
-Changes are approved by [describe — e.g., "the team lead before work begins" or "no formal pre-approval; review happens at the PR stage" or "the CEO reviews all significant changes"].
+Each change is approved by the change-approval control in section 4. [Describe any approval before work begins — e.g., "the product owner approves the plan on the work item before work begins" or "the CEO approves all significant changes before work begins".]
 
 ## 3. Development Standards
 
 ### Branching Strategy
 
 <!-- CUSTOMIZE:
-- What branching model do you actually use? Git Flow, GitHub Flow (feature branches off main), trunk-based development, or something else?
-- Do you use feature branches? How are they named?
-- Is there a protected main/production branch? Who can merge to it?
-- Do you use release branches, or do you deploy directly from main?
+- What is the main branch of each repository called (`main`, `master`)?
+- Who can push to the main branch, and through which credentials?
+- Do you deploy directly from the main branch, or from release tags?
 -->
 
-[Organization Name] uses [describe actual branching strategy — e.g., "feature branches off the main branch. Each feature branch is named with a prefix describing the change type (e.g., feature/, fix/, chore/)."].
+[Organization Name] pushes every change directly to the main branch (`[main]`) of its repository once the change-approval control in section 4 has passed. Each commit message records the change in `## Problem`, `## Solution` and `## Verified` sections.
 
-Protected branches:
-- `main` / `master`: [describe protections — e.g., "requires PR approval, no direct pushes" or "direct pushes are allowed by the CTO"]
+Push access to the main branch: [who — e.g., "the engineering team and the AI agents working for them, through [credential mechanism]"].
 
 ### Coding Standards
 
@@ -88,36 +90,39 @@ Automated enforcement:
 - Formatters: [list tools — e.g., Prettier, Black, or "none"]
 - Enforcement: [CI pipeline / pre-commit hooks / manual / not enforced]
 
-## 4. Code Review Requirements
+## 4. Change Approval
 
 <!-- CUSTOMIZE:
-- Are code reviews required for all changes? Or only for certain types (e.g., "all production changes" but not "documentation updates")?
-- How many reviewers are required? Is it one person, two people, or "whoever is available"?
-- Who is qualified to review? Any developer, or only senior developers / the CTO?
-- What does a reviewer actually check? Functionality? Style? Security? Tests? Or just a quick "looks fine"?
-- How long do reviews typically take? Minutes, hours, days?
-- Can the author merge their own PR after approval, or does someone else merge it?
-- If AI agents generate code: does AI-generated code get the same review, more review, or less review than human-written code?
-- Can the CEO or CTO bypass code review in urgent situations?
+- Which AI agent performs the independent red-team review, and on which model? It runs on a different model from the one that made the change.
+- Which automated security scan runs, and when (pre-commit, pre-push, CI)?
+- Who is the accountable human who gives the "done." verification, for each repository or change type?
+- Where is each step's evidence recorded (decision log, work item, scan output location)?
+- Who may authorize skipping a step, and where is the skip recorded?
 -->
 
-### Review Process
+### Change-Approval Control
 
-All changes to [production code / all code / describe scope] require [a code review via pull request / peer review / describe actual process].
+Every change to [all code in scope / describe scope] passes three steps before it is pushed to the main branch, and each step is recorded as evidence:
 
-| Requirement | Standard Changes | [Other category if applicable] |
-|-------------|-----------------|-------------------------------|
-| Reviewers required | [1 / 2 / varies] | [number] |
-| Who can review | [Any developer / Senior devs only / CTO] | [who] |
-| Who can merge | [Reviewer / Author after approval / CTO only] | [who] |
+| Step | What happens | Performed by | Evidence |
+|------|--------------|--------------|----------|
+| Independent AI red-team review | An AI agent running on a different model from the one that made the change reviews the change and its tests as an adversary and gives a PASS or FAIL verdict | [review agent and model — e.g., "OpenAI Codex"] | [where the findings and verdict are recorded — e.g., "the work item and the decision log"] |
+| Automated security scan | [scan tool] scans the change for vulnerabilities and committed secrets | [when it runs — e.g., "a pre-push hook"] | [where the scan result is stored] |
+| "done." verification | The accountable human tests the change, smoke-tests the likely regressions and replies "done." | [role — e.g., "the product owner"] | The decision log (the AI agent session transcript) |
+
+A change is pushed to the main branch once all three steps have passed.
 
 ### Review Checklist
 
-Reviewers verify:
+The red-team review verifies:
 - [ ] [Code functions correctly]
 - [ ] [Tests are included and pass]
 - [ ] [No secrets or credentials in the code]
-- [ ] [Add/remove items to match what reviewers actually check]
+- [ ] [Add/remove items to match what the review actually checks]
+
+### Authorized Skips
+
+A step is skipped only with the authorization of [who — e.g., "the CTO"]. Each skip is recorded with its reason and its authorizer in [where — e.g., "the commit message and the work item"].
 
 ## 5. Testing Requirements
 
@@ -150,17 +155,17 @@ Reviewers verify:
 ## 6. Deployment Process
 
 <!-- CUSTOMIZE:
-- Walk through how code actually gets from "merged PR" to "running in production." Be specific.
+- Walk through how code actually gets from "pushed to the main branch" to "running in production." Be specific.
 - Is deployment automated (CI/CD) or manual? What tools do you use (GitHub Actions, AWS CodePipeline, Jenkins, manual SSH and deploy)?
 - Who can trigger a deployment? Anyone, or only certain people?
-- Do you deploy continuously (every merge goes to production), on a schedule, or manually when someone decides to?
+- Do you deploy continuously (every push to the main branch goes to production), on a schedule, or manually when someone decides to?
 - Do you have rollback procedures? Have you ever had to roll back a deployment? What happened?
 - Is there any monitoring or verification after deployment? (e.g., "We check error rates for 30 minutes after deploy.")
 -->
 
 ### Deployment Pipeline
 
-1. [Describe step 1 — e.g., "Developer merges PR to main branch."]
+1. [Describe step 1 — e.g., "Once the change-approval control has passed, the change is pushed to the main branch."]
 2. [Describe step 2 — e.g., "CI pipeline runs tests and builds a Docker image."]
 3. [Describe step 3 — e.g., "Image is deployed to staging for smoke testing."]
 4. [Describe step 4 — e.g., "After 24 hours in staging, production deployment is triggered manually by the CTO."]
@@ -177,7 +182,7 @@ Reviewers verify:
 
 If a deployment causes issues:
 
-1. [Describe what actually happens — e.g., "Revert the merge commit and redeploy" or "Roll back to the previous ECS task definition" or "We don't have a formal rollback process yet."]
+1. [Describe what actually happens — e.g., "Revert the commit on the main branch and redeploy" or "Roll back to the previous ECS task definition" or "We don't have a formal rollback process yet."]
 
 ### Post-Deployment Verification
 
@@ -187,7 +192,7 @@ After deployment, [describe what actually happens — e.g., "the deployer monito
 
 <!-- CUSTOMIZE:
 - What counts as an emergency? A production outage? A security vulnerability? A customer-facing bug? All of the above?
-- What process is actually followed for emergency changes? Can someone deploy without a code review? Without tests?
+- What process is actually followed for emergency changes? Which steps of the change-approval control may be deferred? Testing?
 - Who can authorize an emergency change?
 - How are emergency changes documented after the fact? Is there a post-incident review?
 - How often do emergency changes actually happen? Monthly? Quarterly? Rarely?
@@ -199,18 +204,18 @@ An emergency change is defined as [describe — e.g., "any change required to re
 
 ### Emergency Process
 
-Emergency changes may bypass [describe what's bypassed — e.g., "the standard code review process" or "staging deployment" or "nothing — all changes follow the same process"].
+Emergency changes may defer [describe what's deferred — e.g., "the independent AI red-team review" or "staging deployment" or "nothing — all changes follow the same process"]. A deferred step is an authorized skip (section 4), recorded with its reason and its authorizer.
 
 Emergency changes require:
 - [ ] Approval from [who — e.g., CTO or CEO]
 - [ ] [Any other minimum requirements]
 - [ ] Post-deployment documentation within [timeframe — e.g., 24 hours / next business day]
-- [ ] Retroactive code review within [timeframe]
+- [ ] Retroactive independent AI red-team review within [timeframe]
 
 ### Post-Emergency Documentation
 
 After an emergency change, the following must be completed within [timeframe]:
-- [Describe what documentation is required — incident report, retroactive PR, change record update, etc.]
+- [Describe what documentation is required — incident report, retroactive red-team review, change record update, etc.]
 
 ## 8. Review Schedule
 

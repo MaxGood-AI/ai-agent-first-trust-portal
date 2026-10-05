@@ -123,7 +123,7 @@ Password requirements (where applicable):
 - Do you actually follow least privilege, or does everyone have admin access to everything? Be honest — it's better to document what you do and plan improvements than to write a policy you don't follow.
 - Do you use role-based access (defined roles with specific permissions) or is it more ad-hoc?
 - For your cloud infrastructure (AWS/GCP/Azure): do developers have production access? Can everyone deploy, or only certain people?
-- For your source code: can everyone merge to main, or are there branch protections?
+- For your source code: who can push to the main branch, and through which credentials?
 - Who has access to customer data directly (database access, admin panels, etc.)?
 -->
 

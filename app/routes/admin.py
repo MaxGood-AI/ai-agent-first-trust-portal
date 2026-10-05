@@ -687,8 +687,9 @@ _COLLECTOR_CATALOG = {
     "git": {
         "label": "Git / CodeCommit",
         "description": (
-            "Collects branch protection, PR reviews, and commit-message "
-            "evidence from CodeCommit or GitHub repositories."
+            "Checks that every commit on each CodeCommit repository's default "
+            "branch carries a structured ## Problem / ## Solution / ## Verified "
+            "change record."
         ),
     },
     "platform": {
@@ -819,18 +820,13 @@ def collector_configure_submit(name):
     # pending in the session.
     parsed_overrides: dict = {}
     if name == "git":
-        repos_raw = (request.form.get("repositories") or "").strip()
-        if "repositories" in request.form:
-            parsed_overrides["repositories"] = [
-                line.strip() for line in repos_raw.splitlines() if line.strip()
-            ] or None
-        lookback = (request.form.get("lookback_days") or "").strip()
-        if lookback:
-            try:
-                parsed_overrides["lookback_days"] = int(lookback)
-            except ValueError:
-                flash("lookback_days must be an integer", "error")
-                return redirect(url_for("admin.collector_configure_form", name=name))
+        from collectors.git.collector import parse_form_settings
+
+        try:
+            parsed_overrides.update(parse_form_settings(request.form))
+        except ValueError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("admin.collector_configure_form", name=name))
 
     if name == "platform":
         services_raw = (request.form.get("services_json") or "").strip()

@@ -28,7 +28,7 @@ COLLECTOR_CATALOG: list[tuple[str, str, str]] = [
     (
         "git",
         "Git / CodeCommit",
-        "Branch protection, PR reviews, commit-message compliance — change "
+        "Structured change records on every default-branch commit — change "
         "management evidence.",
     ),
     (

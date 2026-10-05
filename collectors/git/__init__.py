@@ -1,7 +1,8 @@
-"""Git v2 collector package.
+"""Git collector package.
 
-Exports ``GitCollector`` which uses AWS CodeCommit as its change-management
-evidence source. GitHub support is planned for a follow-up release.
+Exports ``GitCollector``, which reads change-management evidence from AWS
+CodeCommit: every commit on each in-scope repository's default branch carries
+a structured ``## Problem`` / ``## Solution`` / ``## Verified`` message.
 """
 
 from collectors.git.collector import GitCollector

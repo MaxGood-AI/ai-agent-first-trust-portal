@@ -44,11 +44,7 @@ OPERATION_ACTIONS = {
     ("cloudtrail", "describe_trails"): "cloudtrail:DescribeTrails",
     ("cloudtrail", "get_trail_status"): "cloudtrail:GetTrailStatus",
     ("codecommit", "list_repositories"): "codecommit:ListRepositories",
-    ("codecommit", "list_approval_rule_templates"): "codecommit:ListApprovalRuleTemplates",
-    ("codecommit", "list_associated_approval_rule_templates_for_repository"):
-        "codecommit:ListAssociatedApprovalRuleTemplatesForRepository",
-    ("codecommit", "list_pull_requests"): "codecommit:ListPullRequests",
-    ("codecommit", "get_pull_request"): "codecommit:GetPullRequest",
+    ("codecommit", "get_repository"): "codecommit:GetRepository",
     ("codecommit", "get_branch"): "codecommit:GetBranch",
     ("codecommit", "get_commit"): "codecommit:GetCommit",
     ("codecommit", "get_differences"): "codecommit:GetDifferences",
@@ -143,7 +139,7 @@ class CollectorPolicyMatchesCodeTests(unittest.TestCase):
     def test_scan_finds_the_calls_it_is_meant_to_find(self):
         operations = called_operations(COLLECTOR_SOURCES)
         self.assertIn(("s3", "get_bucket_encryption"), operations)
-        self.assertIn(("codecommit", "list_pull_requests"), operations)
+        self.assertIn(("codecommit", "get_commit"), operations)
         self.assertIn(("codecommit", "get_file"), provider_operations())
 
 

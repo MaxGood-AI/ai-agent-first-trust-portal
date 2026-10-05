@@ -23,7 +23,8 @@ class CheckResult:
     """One check's outcome from a collector run.
 
     ``target_test_name`` lets the executor resolve a TestRecord to link the
-    created Evidence row to — exact name match first, then relaxed match.
+    created Evidence row to — exact name match first, then a match ignoring
+    case and surrounding spaces.
     """
 
     check_name: str

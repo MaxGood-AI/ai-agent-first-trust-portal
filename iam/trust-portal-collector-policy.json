@@ -53,8 +53,7 @@
       "Sid": "TrustPortalCollectorCodeCommitList",
       "Effect": "Allow",
       "Action": [
-        "codecommit:ListRepositories",
-        "codecommit:ListApprovalRuleTemplates"
+        "codecommit:ListRepositories"
       ],
       "Resource": "*"
     },
@@ -62,9 +61,9 @@
       "Sid": "TrustPortalCollectorCodeCommitRepositories",
       "Effect": "Allow",
       "Action": [
-        "codecommit:ListAssociatedApprovalRuleTemplatesForRepository",
-        "codecommit:ListPullRequests",
-        "codecommit:GetPullRequest"
+        "codecommit:GetRepository",
+        "codecommit:GetBranch",
+        "codecommit:GetCommit"
       ],
       "Resource": "*"
     }

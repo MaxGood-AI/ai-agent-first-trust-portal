@@ -53,10 +53,25 @@ def _now():
 
 
 def _resolve_test_record(target_test_name: str | None) -> TestRecord | None:
-    """Best-effort lookup of a TestRecord by name for evidence linking."""
+    """Look up the TestRecord a check names, for evidence linking.
+
+    An exact name match wins. Otherwise the name matches ignoring case and
+    surrounding spaces, so a check naming "Policy Management" links to a test
+    record named "Policy management ". Among several matches of the same kind
+    the record with the lowest id is chosen, so the link is deterministic.
+    """
     if not target_test_name:
         return None
-    return TestRecord.query.filter_by(name=target_test_name).first()
+    exact = (TestRecord.query.filter_by(name=target_test_name)
+             .order_by(TestRecord.id).first())
+    if exact is not None:
+        return exact
+    wanted = target_test_name.strip().lower()
+    if not wanted:
+        return None
+    return (TestRecord.query
+            .filter(db.func.lower(db.func.trim(TestRecord.name)) == wanted)
+            .order_by(TestRecord.id).first())
 
 
 def _maybe_create_evidence(
@@ -172,6 +187,7 @@ def execute_run(
 
     pass_count = 0
     fail_count = 0
+    error_count = 0
     evidence_count = 0
 
     for cr in check_results:
@@ -197,8 +213,12 @@ def execute_run(
             pass_count += 1
         elif cr.status == "fail":
             fail_count += 1
+        elif cr.status == "error":
+            error_count += 1
 
-    if fail_count == 0 and pass_count > 0:
+    # A check that errored verified nothing: the run succeeds only when every
+    # check that ran passed. "skipped" checks do not count either way.
+    if fail_count == 0 and error_count == 0 and pass_count > 0:
         status = "success"
     elif pass_count > 0:
         status = "partial"

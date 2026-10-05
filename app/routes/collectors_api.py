@@ -287,7 +287,8 @@ def probe_collector(name):
         required_actions = list(collector_cls.required_permissions) if collector_cls else []
 
     prober = PermissionProber()
-    result = prober.probe(resolved, required_actions=required_actions)
+    result = prober.probe(resolved, required_actions=required_actions,
+                          collector_config=config.config or {})
 
     config.permission_check_at = datetime.now(timezone.utc)
     config.permission_check_result = result.to_dict()

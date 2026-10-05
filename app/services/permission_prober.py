@@ -7,7 +7,9 @@ permission. Access-denied errors are captured as ``fail``; other errors as
 
 Probes are registered in the ``AWS_ACTION_PROBES`` table. Unknown actions
 are reported as ``skipped`` so admins know which permissions cannot yet be
-verified programmatically.
+verified programmatically. A probe marked ``uses_collector_config`` also
+receives the collector's configuration: the CodeCommit repository probes
+exercise a repository in the git collector's scope.
 """
 
 import logging
@@ -16,6 +18,8 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from app.services.credential_resolver import ResolvedCredentials
+from collectors.git.codecommit_checks import repositories_in_scope
+from collectors.git.collector import name_list
 
 logger = logging.getLogger(__name__)
 
@@ -154,41 +158,70 @@ def _probe_codecommit_list_repositories(session: Any) -> None:
     session.client("codecommit").list_repositories(order="ascending")
 
 
-def _probe_codecommit_list_approval_rule_templates(session: Any) -> None:
-    session.client("codecommit").list_approval_rule_templates()
+# Probe ids no repository has: a not-found answer proves the call was authorized.
+_PROBE_BRANCH = "trust-portal-permission-probe"
+_PROBE_COMMIT_ID = "0" * 40
 
 
-def _probe_codecommit_list_associated_approval_rules(session: Any) -> None:
+def _uses_collector_config(probe: Callable[..., None]) -> Callable[..., None]:
+    """Mark a probe that takes the collector's configuration as its second argument."""
+    probe.uses_collector_config = True
+    return probe
+
+
+def _probe_repository(cc: Any, collector_config: dict) -> str | None:
+    """The first repository, by name, in the collector's change-management scope."""
+    names: list[str] = []
+    for page in cc.get_paginator("list_repositories").paginate():
+        names.extend(repository["repositoryName"] for repository in page.get("repositories", []))
+    in_scope, _ = repositories_in_scope(
+        sorted(names),
+        name_list(collector_config.get("repositories")) or [],
+        name_list(collector_config.get("exclude_repositories")) or [],
+    )
+    return in_scope[0] if in_scope else None
+
+
+def _call_allowing_not_found(call: Callable[[], Any], not_found_codes: set[str]) -> None:
+    try:
+        call()
+    except Exception as exc:  # noqa: BLE001
+        code = getattr(exc, "response", {}).get("Error", {}).get("Code", "")
+        if code not in not_found_codes:
+            raise
+
+
+@_uses_collector_config
+def _probe_codecommit_get_repository(session: Any, collector_config: dict) -> None:
     cc = session.client("codecommit")
-    repos = cc.list_repositories().get("repositories", [])
-    if repos:
-        cc.list_associated_approval_rule_templates_for_repository(
-            repositoryName=repos[0]["repositoryName"]
+    name = _probe_repository(cc, collector_config)
+    if name:
+        cc.get_repository(repositoryName=name)
+
+
+@_uses_collector_config
+def _probe_codecommit_get_branch(session: Any, collector_config: dict) -> None:
+    cc = session.client("codecommit")
+    name = _probe_repository(cc, collector_config)
+    if name:
+        _call_allowing_not_found(
+            lambda: cc.get_branch(repositoryName=name, branchName=_PROBE_BRANCH),
+            {"BranchDoesNotExistException"},
         )
 
 
-def _probe_codecommit_list_pull_requests(session: Any) -> None:
+@_uses_collector_config
+def _probe_codecommit_get_commit(session: Any, collector_config: dict) -> None:
     cc = session.client("codecommit")
-    repos = cc.list_repositories().get("repositories", [])
-    if repos:
-        cc.list_pull_requests(repositoryName=repos[0]["repositoryName"])
+    name = _probe_repository(cc, collector_config)
+    if name:
+        _call_allowing_not_found(
+            lambda: cc.get_commit(repositoryName=name, commitId=_PROBE_COMMIT_ID),
+            {"CommitIdDoesNotExistException", "CommitDoesNotExistException", "InvalidCommitIdException"},
+        )
 
 
-def _probe_codecommit_get_pull_request(session: Any) -> None:
-    """There may be no open PRs — catch that as success since the permission
-    is what we're testing, not the data presence."""
-    cc = session.client("codecommit")
-    repos = cc.list_repositories().get("repositories", [])
-    if not repos:
-        return
-    prs = cc.list_pull_requests(
-        repositoryName=repos[0]["repositoryName"]
-    ).get("pullRequestIds", [])
-    if prs:
-        cc.get_pull_request(pullRequestId=prs[0])
-
-
-AWS_ACTION_PROBES: dict[str, Callable[[Any], None]] = {
+AWS_ACTION_PROBES: dict[str, Callable[..., None]] = {
     "sts:GetCallerIdentity": _probe_sts_get_caller_identity,
     "iam:ListUsers": _probe_iam_list_users,
     "iam:ListMFADevices": _probe_iam_list_mfa_devices,
@@ -204,11 +237,9 @@ AWS_ACTION_PROBES: dict[str, Callable[[Any], None]] = {
     "cloudtrail:DescribeTrails": _probe_cloudtrail_describe_trails,
     "cloudtrail:GetTrailStatus": _probe_cloudtrail_get_trail_status,
     "codecommit:ListRepositories": _probe_codecommit_list_repositories,
-    "codecommit:ListApprovalRuleTemplates": _probe_codecommit_list_approval_rule_templates,
-    "codecommit:ListAssociatedApprovalRuleTemplatesForRepository":
-        _probe_codecommit_list_associated_approval_rules,
-    "codecommit:ListPullRequests": _probe_codecommit_list_pull_requests,
-    "codecommit:GetPullRequest": _probe_codecommit_get_pull_request,
+    "codecommit:GetRepository": _probe_codecommit_get_repository,
+    "codecommit:GetBranch": _probe_codecommit_get_branch,
+    "codecommit:GetCommit": _probe_codecommit_get_commit,
 }
 
 
@@ -228,6 +259,7 @@ class PermissionProber:
         self,
         resolved: ResolvedCredentials,
         required_actions: list[str],
+        collector_config: dict | None = None,
     ) -> PermissionProbeResult:
         checked_at = datetime.now(timezone.utc).isoformat()
         session_identity: str | None = None
@@ -289,7 +321,10 @@ class PermissionProber:
                 )
                 continue
             try:
-                probe_fn(resolved.boto_session)
+                if getattr(probe_fn, "uses_collector_config", False):
+                    probe_fn(resolved.boto_session, collector_config or {})
+                else:
+                    probe_fn(resolved.boto_session)
                 results.append(
                     PermissionCheckResult(action=action, status="pass")
                 )

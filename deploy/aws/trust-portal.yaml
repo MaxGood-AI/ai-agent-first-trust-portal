@@ -116,7 +116,7 @@ Parameters:
     Type: String
     Default: '*'
     AllowedPattern: '^[\w.*-]+$'
-    Description: Repositories (name or wildcard) whose pull requests the git collector reads.
+    Description: Repositories (name or wildcard) whose commits the git collector reads.
   CodeCommitKmsKeyArn:
     Type: String
     Default: ''
@@ -388,11 +388,11 @@ Resources:
               - {"Sid": "TrustPortalCollectorRDSReadOnly", "Effect": "Allow", "Action": ["rds:DescribeDBInstances"], "Resource": "*"}
               - {"Sid": "TrustPortalCollectorS3ReadOnly", "Effect": "Allow", "Action": ["s3:ListAllMyBuckets", "s3:GetEncryptionConfiguration", "s3:GetBucketVersioning", "s3:GetBucketPublicAccessBlock"], "Resource": "*"}
               - {"Sid": "TrustPortalCollectorCloudTrailReadOnly", "Effect": "Allow", "Action": ["cloudtrail:DescribeTrails", "cloudtrail:GetTrailStatus"], "Resource": "*"}
-              - {"Sid": "TrustPortalCollectorCodeCommitList", "Effect": "Allow", "Action": ["codecommit:ListRepositories", "codecommit:ListApprovalRuleTemplates"], "Resource": "*"}
+              - {"Sid": "TrustPortalCollectorCodeCommitList", "Effect": "Allow", "Action": ["codecommit:ListRepositories"], "Resource": "*"}
               # END iam/trust-portal-collector-policy.json
               - Sid: TrustPortalCollectorCodeCommitRepositories
                 Effect: Allow
-                Action: ['codecommit:ListAssociatedApprovalRuleTemplatesForRepository', 'codecommit:ListPullRequests', 'codecommit:GetPullRequest']
+                Action: ['codecommit:GetRepository', 'codecommit:GetBranch', 'codecommit:GetCommit']
                 Resource: !Sub 'arn:${AWS::Partition}:codecommit:${AWS::Region}:${AWS::AccountId}:${CollectorRepositoryPattern}'
               - !If
                 - HasGitSourceRepo
