@@ -1,12 +1,23 @@
 """Diff-only import of an evidence repository into the compliance tables.
 
 An *evidence repository* is a directory (a git checkout, or files fetched
-from a git host) with this layout::
+from a git host) with this layout, which a git source reads by default
+(:data:`DEFAULT_EVIDENCE_MAPPINGS`)::
 
     controls.json  systems.json  tests.json  policy-index.json  vendors.json
     risk-register.json  evidence/evidence-index.json
     pentest-evidence/layer<N>/*.json
     decision-logs/<timestamp>_<session-id>.jsonl   (+ optional <stem>.meta.json)
+
+The six files from ``controls.json`` to ``risk-register.json`` are the
+authored datasets (:data:`AUTHORED_EVIDENCE_MAPPINGS`,
+:data:`DEFAULT_DATASETS`). ``cli import`` reads them by default, and the
+evidence index, pentest evidence and decision logs when they are named
+(``--dataset evidence``, ``--dataset pentest-findings``,
+``--decision-logs``). The evidence store (``app.services.evidence_store``)
+imports pentest evidence and decision logs alongside every git source; a
+source whose repository leaves those kinds to the store has
+:data:`AUTHORED_EVIDENCE_MAPPINGS` as its ``path_mappings``.
 
 Every write to a compliance table produces an audit-log row, so the engine
 writes **only real differences**: each record built from a file is compared
@@ -26,8 +37,9 @@ Public API
     Store one decision-log transcript (see
     :mod:`app.services.evidence_import_decision_logs`). Flushes, does not commit.
 ``import_directory(data_dir)``
-    Import a local checkout: datasets in :data:`DATASET_ORDER`, then decision
-    logs. Commits after each file.
+    Import a local checkout: the :data:`DEFAULT_DATASETS` (or the datasets
+    named) in :data:`DATASET_ORDER`, then, when asked, decision logs.
+    Commits after each file.
 ``classify_path(path)``
     The kind of a repository path per :data:`DEFAULT_EVIDENCE_MAPPINGS`.
 ``is_deadlock(exc)``
@@ -42,7 +54,8 @@ checkout) scopes that ownership: a finding's ``source_file`` is
 ``<namespace>:layer<N>/<file>.json`` (``layer<N>/<file>.json`` without a
 namespace) and its id is derived from that ``source_file``, so two sources
 with the same path never update, replace or delete each other's findings.
-A namespaced import or removal of a path also takes over the findings that
+A namespaced import or removal of a path (every namespace but the evidence
+store's) also takes over the findings that
 ``cli import`` stored for the same path (``source_file`` without a
 namespace), so a database loaded by ``cli import`` and then synced from a
 git source (the cutover) keeps no stale copies: those findings, stored
@@ -51,6 +64,17 @@ file's findings created under the namespace - a one-time rebuild counted as
 ``retired`` (and reported by a git-source sync run as ``pentest_rebuild``).
 Every deletion and creation is also an audit-log row. Other datasets are
 keyed by their record ids and ignore ``namespace``.
+
+The evidence store imports in its own namespace (:data:`STORE_NAMESPACE`)
+through its own insert-only import (``app.services.evidence_store.plans``),
+never through :func:`import_dataset_file` or :func:`remove_dataset_file`,
+which refuse that namespace: it never takes over, updates or deletes the
+findings of any other namespace, and no other import skips a file because
+the store holds it. A set of findings is identified, in every namespace, by
+its content (:func:`identity_digest` of each finding's canonical SHA-256 and
+ordinal); :func:`pentest_holders` and :func:`held_findings` recompute what
+each other namespace holds from its findings' content, and
+:func:`unstorable_value` names a value the database refuses.
 
 Diff semantics
 --------------
@@ -104,6 +128,7 @@ from app.models import db
 from app.services.evidence_import_decision_logs import (  # noqa: F401 (re-exported API)
     AUTHORITY_ADMIN,
     AUTHORITY_MEMBER,
+    AUTHORITY_STORE,
     AUTHORITY_SYSTEM,
     MAX_TRANSCRIPT_BYTES,
     DecisionLogResult,
@@ -118,11 +143,12 @@ from app.services.evidence_import_decision_logs import (  # noqa: F401 (re-expor
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "DATASET_ORDER", "DEFAULT_EVIDENCE_MAPPINGS", "ImportCounts", "DecisionLogResult",
+    "AUTHORED_EVIDENCE_MAPPINGS", "DATASET_ORDER", "DEFAULT_DATASETS", "DEFAULT_EVIDENCE_MAPPINGS",
+    "ImportCounts", "DecisionLogResult",
     "import_dataset_file", "remove_dataset_file", "import_decision_log", "import_directory",
     "classify_path", "session_id_from_path", "is_deadlock", "lock_session",
     "MAX_TRANSCRIPT_BYTES", "TranscriptTooLargeError",
-    "AUTHORITY_SYSTEM", "AUTHORITY_ADMIN", "AUTHORITY_MEMBER",
+    "AUTHORITY_SYSTEM", "AUTHORITY_STORE", "AUTHORITY_ADMIN", "AUTHORITY_MEMBER", "STORE_NAMESPACE",
 ]
 
 DEADLOCK_SQLSTATE = "40P01"
@@ -139,17 +165,25 @@ DATASET_ORDER = [
     "risk-register", "pentest-findings",
 ]
 
+# The authored datasets: what ``cli import`` reads by default (in DATASET_ORDER).
+DEFAULT_DATASETS = ["controls", "systems", "tests", "policies", "vendors", "risk-register"]
+
 # Repository path pattern → kind. ``*`` does not cross ``/``; ``**`` does.
 # ``dataset:<name>`` kinds go to import_dataset_file(name, ...); ``decision_log``
 # paths go to import_decision_log (a ``.manifest.json`` names a chunked file,
 # see app.services.chunked_files).
-DEFAULT_EVIDENCE_MAPPINGS = [
+# The authored datasets' mappings: the ``path_mappings`` of a source whose
+# repository leaves pentest evidence and decision logs to the evidence store.
+AUTHORED_EVIDENCE_MAPPINGS = [
     {"pattern": "controls.json", "kind": "dataset:controls"},
     {"pattern": "systems.json", "kind": "dataset:systems"},
     {"pattern": "tests.json", "kind": "dataset:tests"},
     {"pattern": "policy-index.json", "kind": "dataset:policies"},
     {"pattern": "vendors.json", "kind": "dataset:vendors"},
     {"pattern": "risk-register.json", "kind": "dataset:risk-register"},
+]
+# A git source's defaults: every kind of the evidence repository layout.
+DEFAULT_EVIDENCE_MAPPINGS = AUTHORED_EVIDENCE_MAPPINGS + [
     {"pattern": "evidence/evidence-index.json", "kind": "dataset:evidence"},
     {"pattern": "pentest-evidence/layer*/*.json", "kind": "dataset:pentest-findings"},
     {"pattern": "decision-logs/*.jsonl", "kind": "decision_log"},
@@ -158,6 +192,8 @@ DEFAULT_EVIDENCE_MAPPINGS = [
 
 MAX_ERRORS = 100
 _ID_CHUNK = 500
+# Pentest-findings namespace of the evidence store (app.services.evidence_store).
+STORE_NAMESPACE = "evidence-store"
 _BOOKKEEPING_COLUMNS = ("updated_at",)
 
 
@@ -581,6 +617,182 @@ def _apply_namespace(records, namespace):
         record["id"] = finding_id(source_file, record["other_data"], seen)
 
 
+def identity_digest(keys) -> str:
+    """SHA-256 of a file's finding keys (``<digest>:<ordinal>``: each finding's
+    canonical SHA-256 and its ordinal among identical findings), sorted and
+    comma-joined: the identity of a set of findings, the same in every
+    namespace that holds them."""
+    import hashlib
+
+    return hashlib.sha256(",".join(sorted(keys)).encode("utf-8")).hexdigest()
+
+
+def finding_keys(findings) -> list:
+    """The keys (:func:`identity_digest`) of ``findings`` (each a finding's
+    ``other_data``), in order."""
+    from cli.loaders.pentest_findings import finding_key
+
+    seen = collections.Counter()
+    return ["%s:%d" % finding_key(finding, seen) for finding in findings]
+
+
+@dataclass(frozen=True)
+class HeldFindings:
+    """The findings one ``source_file`` holds, recomputed from their content.
+
+    ``count`` rows; ``identity`` is :func:`identity_digest` of their content's
+    keys; ``consistent`` is True when every row's id is the one its content
+    gives under that ``source_file`` and its mapped columns (severity,
+    summary, remediation, SOC 2 controls, file path, layer) are the ones its
+    content maps to - an edited or re-keyed finding makes it False.
+    """
+
+    count: int
+    identity: str
+    consistent: bool
+
+    def matches(self, count: int, identity: str) -> bool:
+        """True when these findings are exactly the ``count`` findings of ``identity``."""
+        return self.consistent and (self.count, self.identity) == (count, identity)
+
+
+_MAPPED_FINDING_COLUMNS = ("severity", "summary", "remediation", "soc2_controls", "file_path", "layer")
+
+
+def holder_layer(holder: str):
+    """The layer number of a stored ``source_file`` (``[<namespace>:]layer<N>/<file>.json``), or None."""
+    match = re.fullmatch(r"layer(\d+)", holder.rsplit("/", 1)[0].rsplit(":", 1)[-1])
+    return int(match.group(1)) if match else None
+
+
+def mapped_columns_match(row, holder: str) -> bool:
+    """True when a stored finding's mapped columns are the ones its content
+    (``other_data``) maps to under ``holder``; False for an edited finding or
+    one whose content is not a JSON object."""
+    from app.models import PentestFinding
+    from cli.loaders.pentest_findings import PentestFindingsLoader
+
+    finding = row.other_data
+    if not isinstance(finding, dict):
+        return False
+    columns = PentestFinding.__table__.columns
+    expected = coerce_record(PentestFinding, PentestFindingsLoader._finding_record(
+        None, finding, "", holder_layer(holder), "", holder, None))
+    return all(values_equal(columns[name], coerce_value(columns[name], getattr(row, name)), expected[name])
+               for name in _MAPPED_FINDING_COLUMNS)
+
+
+def finding_rows(source_files) -> dict:
+    """``{source_file: [row]}`` of the stored findings of ``source_files`` (one query
+    per 500 names; each row with its id, ``other_data`` and mapped columns)."""
+    from app.models import PentestFinding
+
+    wanted = sorted({name for name in source_files if isinstance(name, str)})
+    model = PentestFinding
+    rows = collections.defaultdict(list)
+    for start in range(0, len(wanted), _ID_CHUNK):
+        for row in db.session.query(model.source_file, model.id, model.other_data,
+                                    *[getattr(model, name) for name in _MAPPED_FINDING_COLUMNS]).filter(
+                model.source_file.in_(wanted[start:start + _ID_CHUNK])):
+            rows[row.source_file].append(row)
+    return rows
+
+
+def held_findings(source_files) -> dict:
+    """``{source_file: HeldFindings}`` of every one of ``source_files`` holding findings,
+    each row's content re-hashed and its id recomputed under that ``source_file``
+    (``v2`` ids: every namespace but the evidence store's, whose findings
+    ``app.services.evidence_store.plans.store_holdings`` recomputes)."""
+    from cli.loaders.pentest_findings import finding_id
+
+    held = {}
+    for holder, found in finding_rows(source_files).items():
+        seen, recomputed, consistent = collections.Counter(), [], True
+        for row in found:
+            consistent = consistent and mapped_columns_match(row, holder)
+            recomputed.append(finding_id(holder, row.other_data, seen))
+        consistent = consistent and sorted(row.id for row in found) == sorted(recomputed)
+        held[holder] = HeldFindings(len(found), identity_digest(finding_keys(row.other_data for row in found)),
+                                    consistent)
+    return held
+
+
+def pentest_holders(source_file):
+    """``{stored source_file: HeldFindings}`` of every namespace but the evidence
+    store's holding findings of ``layer<N>/<file>.json`` (``cli import`` under the
+    bare path, each other namespace under ``<namespace>:<path>``), each recomputed
+    from its findings' content (:func:`held_findings`)."""
+    from app.models import PentestFinding
+
+    names = {row[0] for row in db.session.query(PentestFinding.source_file).filter(
+        sa.or_(PentestFinding.source_file == source_file,
+               PentestFinding.source_file.endswith(":" + source_file, autoescape=True))).distinct()}
+    return held_findings(names - {_namespaced(source_file, STORE_NAMESPACE)})
+
+
+def _text_problem(value: str) -> str | None:
+    if "\x00" in value:
+        return "a NUL character"
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return "an unpaired surrogate (text that is not UTF-8)"
+    return None
+
+
+def _json_problem(value) -> str | None:
+    """Why a JSON value cannot be stored (and audited as JSONB), or None."""
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, bool) or item is None or isinstance(item, int):
+            continue
+        if isinstance(item, float):
+            if item != item or item in (float("inf"), float("-inf")):
+                return "a non-finite number (NaN or Infinity), which JSON cannot hold"
+        elif isinstance(item, str):
+            problem = _text_problem(item)
+            if problem:
+                return problem
+        elif isinstance(item, dict):
+            for name, member in item.items():
+                if not isinstance(name, str):
+                    return "a member name that is not text"
+                problem = _text_problem(name)
+                if problem:
+                    return problem + " in a member name"
+                stack.append(member)
+        elif isinstance(item, list):
+            stack.extend(item)
+        else:
+            return f"a {type(item).__name__}, which JSON cannot hold"
+    return None
+
+
+def unstorable_value(column, value) -> str | None:
+    """Why the database (or the audit log, which records each row as JSONB)
+    refuses ``value`` for ``column``, or None when it stores it: text holding a
+    NUL character or an unpaired surrogate (in a text column, or anywhere in a
+    JSON value, member names included), a non-finite number in JSON, a value
+    of a type the column does not take, a date-time outside the years 1 to
+    9999."""
+    if value is None:
+        return None
+    column_type = column.type
+    if isinstance(column_type, sa.JSON):
+        problem = _json_problem(value)
+    elif isinstance(column_type, sa.String):
+        problem = _text_problem(value) if isinstance(value, str) else "a value that is not text"
+    elif isinstance(column_type, sa.DateTime):
+        problem = None if isinstance(value, datetime) else "a value that is not a date-time"
+    elif isinstance(column_type, sa.Integer):
+        problem = None if isinstance(value, int) and not isinstance(value, bool) and -2**31 <= value < 2**31 \
+            else "a value that is not a 32-bit integer"
+    else:
+        problem = None
+    return f"{column.key} holds {problem}, which the database cannot store" if problem else None
+
+
 def _existing_pentest_rows(model, source_files, ids, ctx):
     """Stored findings of ``source_files`` plus any stored rows with the new ids."""
     if ctx.bulk:
@@ -694,6 +906,8 @@ def import_dataset_file(dataset: str, path: str, data, *, dry_run: bool = False,
     Flushes but does not commit. Raises ValueError for an unknown dataset or
     unparseable JSON.
     """
+    if namespace == STORE_NAMESPACE:
+        raise ValueError("the evidence store's namespace is written only by the evidence store's sync")
     loader = _loader_for(dataset)
     parsed = _parse_json(path, data)
     return _import_parsed(loader, path, parsed, ImportContext(dry_run=dry_run, namespace=namespace))
@@ -710,6 +924,8 @@ def remove_dataset_file(dataset: str, path: str, *, dry_run: bool = False,
     """
     from cli.loaders.base import SkipRecord
 
+    if namespace == STORE_NAMESPACE:
+        raise ValueError("the evidence store's findings are never removed")
     loader = _loader_for(dataset)
     counts = ImportCounts()
     if not hasattr(loader, "build_file_records"):
@@ -777,12 +993,14 @@ def import_loader_from_directory(loader, data_dir, *, dry_run=False, ctx=None, l
     return counts
 
 
-def import_directory(data_dir: str, *, dry_run: bool = False, include_decision_logs: bool = True,
+def import_directory(data_dir: str, *, dry_run: bool = False, include_decision_logs: bool = False,
                      datasets=None, log=None) -> dict:
     """Import a local evidence-repository checkout.
 
-    Datasets are imported in :data:`DATASET_ORDER` (restricted to
-    ``datasets`` when given), then decision logs from ``decision-logs/``: for
+    Datasets are imported in :data:`DATASET_ORDER`: the
+    :data:`DEFAULT_DATASETS`, or exactly ``datasets`` when given (``evidence``
+    and ``pentest-findings`` are imported only when named). With
+    ``include_decision_logs``, decision logs follow from ``decision-logs/``: for
     each session the largest export wins, chunked transcripts are
     reassembled, and a ``<stem>.meta.json`` sidecar supplies the exit reason
     and the agent label of a new session. Commits after each file. A rejected transcript (one that does not extend
@@ -796,7 +1014,7 @@ def import_directory(data_dir: str, *, dry_run: bool = False, include_decision_l
     if not os.path.isdir(data_dir):
         raise ValueError(f"data directory does not exist: {data_dir}")
     if datasets is None:
-        selected = list(DATASET_ORDER)
+        selected = [name for name in DATASET_ORDER if name in DEFAULT_DATASETS]
     else:
         unknown = [name for name in datasets if name not in DATASET_ORDER]
         if unknown:

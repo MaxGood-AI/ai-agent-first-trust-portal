@@ -14,9 +14,11 @@ Evidence repository (a git source with role ``evidence``), laid out per
   .evidence-repo.json     format marker (spec version)
   controls.json, systems.json, tests.json, vendors.json, risk-register.json  ([])
   policy-index.json       one entry per scaffolded policy, pointing at the governance repo
-  evidence/evidence-index.json, evidence/artifacts/
-  pentest-evidence/layer1..layer4/, decision-logs/
+  evidence/artifacts/decisions/  hand-authored decision records
   README.md
+
+Decision logs, pentest evidence and evidence artifacts are machine-produced:
+they go to the evidence store, not to this repository.
 
 The command writes files only (it never runs git); existing files are left
 untouched unless ``--force`` is given. Initialise both directories as git
@@ -56,16 +58,17 @@ organisation actually does before the policy is approved.
 
 EVIDENCE_README = """# Evidence repository
 
-This repository holds {company}'s compliance data and evidence in the open layout described
-by the trust portal's `docs/evidence-repo-spec.md` (format version {version}). The portal reads
+This repository holds {company}'s authored compliance data in the open layout described by
+the trust portal's `docs/evidence-repo-spec.md` (format version {version}). The portal reads
 it through a git source with role `evidence` and imports only what changed.
 
 - `controls.json`, `systems.json`, `tests.json`, `vendors.json`, `risk-register.json`,
   `policy-index.json` - datasets (JSON arrays).
-- `evidence/evidence-index.json` - evidence metadata; files go under `evidence/artifacts/`.
-- `pentest-evidence/layer<N>/*.json` - security assessment findings, one file per scan output.
-- `decision-logs/*.jsonl` - AI agent session transcripts (files over 5 MiB are split into
-  parts plus a `.manifest.json`).
+- `evidence/artifacts/decisions/` - hand-authored decision records (kept here, not imported).
+
+Machine-produced evidence - AI agent session transcripts (decision logs), AI code reviews,
+security-assessment output and reports, generated evidence artifacts - goes to the
+portal's write-once evidence store, which the portal reads and records on its own.
 """
 
 SECTION_READMES = {
@@ -147,11 +150,7 @@ def scaffold(governance_dir: str, evidence_dir: str, company: str, force: bool =
         _write(os.path.join(evidence_dir, name), "[]\n", force, written)
     _write(os.path.join(evidence_dir, "policy-index.json"), json.dumps(policy_index, indent=2) + "\n",
            force, written)
-    _write(os.path.join(evidence_dir, "evidence", "evidence-index.json"), "[]\n", force, written)
-    _keep(os.path.join(evidence_dir, "evidence", "artifacts"), written)
-    for layer in range(1, 5):
-        _keep(os.path.join(evidence_dir, "pentest-evidence", f"layer{layer}"), written)
-    _keep(os.path.join(evidence_dir, "decision-logs"), written)
+    _keep(os.path.join(evidence_dir, "evidence", "artifacts", "decisions"), written)
     _write(os.path.join(evidence_dir, "README.md"),
            EVIDENCE_README.format(company=company, version=EVIDENCE_REPO_FORMAT["version"]), force, written)
     return written

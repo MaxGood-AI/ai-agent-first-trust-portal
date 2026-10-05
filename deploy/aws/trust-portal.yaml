@@ -2,7 +2,7 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
   AI-agent-first trust portal on Amazon Lightsail (core stack): container
   service, private PostgreSQL database, certificate, identity, secrets, logs,
-  write-once archive bucket and daily database snapshots. The optional CI/CD
+  write-once archive and evidence store buckets and daily database snapshots. The optional CI/CD
   is deploy/aws/trust-portal-pipeline.yaml. Runbook: deploy/README.md.
 
 Parameters:
@@ -104,6 +104,27 @@ Parameters:
     MinValue: 1
     MaxValue: 100
     Description: Object Lock compliance-mode retention of every object in the archive bucket.
+  EvidenceRetentionYears:
+    Type: Number
+    Default: 7
+    MinValue: 1
+    MaxValue: 100
+    Description: Object Lock governance-mode retention of every object in the evidence store bucket.
+  EvidenceErasurePrincipalArn:
+    Type: String
+    Default: ''
+    AllowedPattern: '^(arn:aws[a-z-]*:iam::[0-9]{12}:(role|user)/[\w+=,.@/-]+)?$'
+    Description: IAM role or user exempt from the evidence store's delete and lock denials; set only for a documented erasure, then cleared.
+  EvidenceErasureObjectKey:
+    Type: String
+    Default: ''
+    AllowedPattern: '^[^*?$]*$'
+    Description: The one object key the erasure principal may erase; empty, none.
+  EvidenceWriterPrincipalArns:
+    Type: CommaDelimitedList
+    Default: ''
+    AllowedPattern: '^(arn:aws[a-z-]*:iam::[0-9]{12}:(role|user)/[\w+=,.@/-]+)?$'
+    Description: IAM roles and users that may assume the evidence writer role; empty, none.
   GovernanceRepository:
     Type: String
     Default: ''
@@ -152,6 +173,9 @@ Conditions:
   HasGitSourceRepo: !Or [!Condition HasGovernanceRepo, !Condition HasEvidenceRepo]
   HasKmsKey: !Not [!Equals [!Ref CodeCommitKmsKeyArn, '']]
   HasAssumableRoles: !Not [!Equals [!Join ['', !Ref CollectorAssumableRoleArns], '']]
+  HasErasurePrincipal: !Not [!Equals [!Ref EvidenceErasurePrincipalArn, '']]
+  HasErasureKey: !Not [!Equals [!Ref EvidenceErasureObjectKey, '']]
+  HasWriterPrincipals: !Not [!Equals [!Join ['', !Ref EvidenceWriterPrincipalArns], '']]
 
 Resources:
   LogGroup:
@@ -229,7 +253,7 @@ Resources:
       Environment:
         Variables:
           STACK_ID: !Ref 'AWS::StackId'
-          SECRET_SPECS: !Sub '[{"SecretId":"${PortalSecret}","Generate":{"SECRET_KEY":"session-key","DATABASE_PASSWORD":"password","BOOTSTRAP_TOKEN":"token","COLLECTOR_ENCRYPTION_KEYS":"fernet"},"Regenerable":["SECRET_KEY","DATABASE_PASSWORD","BOOTSTRAP_TOKEN"],"Fixed":{"CLOUDWATCH_LOG_GROUP":"${LogGroup}"},"Remove":["DATABASE_OWNER_USER","DATABASE_OWNER_PASSWORD","DATABASE_OWNER_URL","AUDIT_WITNESS_BUCKET"]},{"SecretId":"${OwnerSecret}","Generate":{"DATABASE_OWNER_PASSWORD":"password"},"Fixed":{"DATABASE_OWNER_USER":"${DatabaseMasterUsername}"}}]'
+          SECRET_SPECS: !Sub '[{"SecretId":"${PortalSecret}","Generate":{"SECRET_KEY":"session-key","DATABASE_PASSWORD":"password","BOOTSTRAP_TOKEN":"token","COLLECTOR_ENCRYPTION_KEYS":"fernet"},"Regenerable":["SECRET_KEY","DATABASE_PASSWORD","BOOTSTRAP_TOKEN"],"Fixed":{"CLOUDWATCH_LOG_GROUP":"${LogGroup}"},"Remove":["DATABASE_OWNER_USER","DATABASE_OWNER_PASSWORD","DATABASE_OWNER_URL","AUDIT_WITNESS_BUCKET","EVIDENCE_STORE_BUCKET"]},{"SecretId":"${OwnerSecret}","Generate":{"DATABASE_OWNER_PASSWORD":"password"},"Fixed":{"DATABASE_OWNER_USER":"${DatabaseMasterUsername}"}}]'
       Code:
         # Source of truth: deploy/aws/lambdas/secret_init.py
         ZipFile: |
@@ -322,7 +346,7 @@ Resources:
     Properties:
       ServiceToken: !GetAtt SecretInitFunction.Arn
       ServiceTimeout: 300
-      Spec: !Sub '[{"SecretId":"${PortalSecret}","Generate":{"SECRET_KEY":"session-key","DATABASE_PASSWORD":"password","BOOTSTRAP_TOKEN":"token","COLLECTOR_ENCRYPTION_KEYS":"fernet"},"Regenerable":["SECRET_KEY","DATABASE_PASSWORD","BOOTSTRAP_TOKEN"],"Fixed":{"CLOUDWATCH_LOG_GROUP":"${LogGroup}"},"Remove":["DATABASE_OWNER_USER","DATABASE_OWNER_PASSWORD","DATABASE_OWNER_URL","AUDIT_WITNESS_BUCKET"]},{"SecretId":"${OwnerSecret}","Generate":{"DATABASE_OWNER_PASSWORD":"password"},"Fixed":{"DATABASE_OWNER_USER":"${DatabaseMasterUsername}"}}]'
+      Spec: !Sub '[{"SecretId":"${PortalSecret}","Generate":{"SECRET_KEY":"session-key","DATABASE_PASSWORD":"password","BOOTSTRAP_TOKEN":"token","COLLECTOR_ENCRYPTION_KEYS":"fernet"},"Regenerable":["SECRET_KEY","DATABASE_PASSWORD","BOOTSTRAP_TOKEN"],"Fixed":{"CLOUDWATCH_LOG_GROUP":"${LogGroup}"},"Remove":["DATABASE_OWNER_USER","DATABASE_OWNER_PASSWORD","DATABASE_OWNER_URL","AUDIT_WITNESS_BUCKET","EVIDENCE_STORE_BUCKET"]},{"SecretId":"${OwnerSecret}","Generate":{"DATABASE_OWNER_PASSWORD":"password"},"Fixed":{"DATABASE_OWNER_USER":"${DatabaseMasterUsername}"}}]'
 
   SecretInitPermission:
     Type: AWS::Lambda::Permission
@@ -452,6 +476,18 @@ Resources:
                 Effect: Deny
                 Action: ['s3:PutObject', 's3:AbortMultipartUpload']
                 Resource: !Sub '${ArchiveBucket.Arn}/archives/*'
+              - Sid: ReadEvidenceStore
+                Effect: Allow
+                Action: ['s3:ListBucketVersions', 's3:GetBucketVersioning', 's3:GetBucketObjectLockConfiguration', 's3:GetBucketPolicy', 's3:GetLifecycleConfiguration']
+                Resource: !GetAtt EvidenceBucket.Arn
+              - Sid: ReadEvidenceVersions
+                Effect: Allow
+                Action: ['s3:GetObject', 's3:GetObjectVersion', 's3:GetObjectRetention']
+                Resource: !Sub '${EvidenceBucket.Arn}/*'
+              - Sid: NoEvidenceWrites
+                Effect: Deny
+                Action: ['s3:Put*', 's3:Delete*', 's3:Abort*', 's3:Bypass*', 's3:Create*', 's3:Update*', 's3:Replicate*', 's3:Restore*', 's3:Initiate*', 's3:Pause*', 's3:ObjectOwnerOverrideToBucketOwner', 's3:TagResource', 's3:UntagResource', 's3:AllowVendedLogDeliveryForResource']
+                Resource: [!GetAtt EvidenceBucket.Arn, !Sub '${EvidenceBucket.Arn}/*']
 
   Database:
     Type: AWS::Lightsail::Database
@@ -560,6 +596,8 @@ Resources:
 
   ArchiveBucketPolicy:
     Type: AWS::S3::BucketPolicy
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       Bucket: !Ref ArchiveBucket
       PolicyDocument:
@@ -603,6 +641,11 @@ Resources:
             Effect: Deny
             Principal: '*'
             Action: ['s3:DeleteObject', 's3:DeleteObjectVersion']
+            Resource: !Sub '${ArchiveBucket.Arn}/*'
+          - Sid: DenyReplicationWrites
+            Effect: Deny
+            Principal: '*'
+            Action: ['s3:ReplicateObject', 's3:ReplicateDelete']
             Resource: !Sub '${ArchiveBucket.Arn}/*'
           - Sid: DenyRetentionChanges
             Effect: Deny
@@ -653,6 +696,146 @@ Resources:
             Effect: Allow
             Action: ['s3:GetObject', 's3:GetObjectVersion']
             Resource: [!Sub '${ArchiveBucket.Arn}/archives/*', !Sub '${ArchiveBucket.Arn}/chain-heads/*']
+
+  EvidenceBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub ${OrgPrefix}-${AppName}-evstore-${EnvironmentName}-${AWS::AccountId}-${AWS::Region}
+      ObjectLockEnabled: true
+      ObjectLockConfiguration:
+        ObjectLockEnabled: Enabled
+        Rule:
+          DefaultRetention: {Mode: GOVERNANCE, Years: !Ref EvidenceRetentionYears}
+      VersioningConfiguration: {Status: Enabled}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+            BucketKeyEnabled: true
+            BlockedEncryptionTypes: {EncryptionType: [SSE-C]}
+      PublicAccessBlockConfiguration: {BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true}
+      OwnershipControls:
+        Rules: [{ObjectOwnership: BucketOwnerEnforced}]
+      LifecycleConfiguration:
+        Rules: [{Id: AbortIncompleteUploadsAfter1Day, Status: Enabled, AbortIncompleteMultipartUpload: {DaysAfterInitiation: 1}}]
+
+  EvidenceBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Bucket: !Ref EvidenceBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource: [!GetAtt EvidenceBucket.Arn, !Sub '${EvidenceBucket.Arn}/*']
+            Condition: {Bool: {'aws:SecureTransport': 'false'}}
+          - Sid: DenyWriteWithoutIfNoneMatch
+            Effect: Deny
+            Principal: '*'
+            Action: s3:PutObject
+            Resource: !Sub '${EvidenceBucket.Arn}/*'
+            Condition:
+              'Null': {'s3:if-none-match': 'true'}
+              Bool: {'s3:ObjectCreationOperation': 'true'}
+          - Sid: DenyNonSseS3Writes
+            Effect: Deny
+            Principal: '*'
+            Action: s3:PutObject
+            Resource: !Sub '${EvidenceBucket.Arn}/*'
+            Condition:
+              'Null': {'s3:x-amz-server-side-encryption': 'false'}
+              StringNotEquals: {'s3:x-amz-server-side-encryption': AES256}
+          - Sid: DenySseCWrites
+            Effect: Deny
+            Principal: '*'
+            Action: s3:PutObject
+            Resource: !Sub '${EvidenceBucket.Arn}/*'
+            Condition: {'Null': {'s3:x-amz-server-side-encryption-customer-algorithm': 'false'}}
+          - Sid: DenyNonStandardStorageClass
+            Effect: Deny
+            Principal: '*'
+            Action: s3:PutObject
+            Resource: !Sub '${EvidenceBucket.Arn}/*'
+            Condition:
+              'Null': {'s3:x-amz-storage-class': 'false'}
+              StringNotEquals: {'s3:x-amz-storage-class': STANDARD}
+          - Sid: OnlyTheWriterRoleWritesEvidence
+            Effect: Deny
+            Principal: '*'
+            Action: s3:PutObject
+            Resource:
+              - !Sub '${EvidenceBucket.Arn}/decision-logs/*'
+              - !Sub '${EvidenceBucket.Arn}/codex-reviews/*'
+              - !Sub '${EvidenceBucket.Arn}/pentest-evidence/*'
+              - !Sub '${EvidenceBucket.Arn}/pentest-reports/*'
+              - !Sub '${EvidenceBucket.Arn}/evidence/artifacts/*'
+            Condition: {ArnNotEquals: {'aws:PrincipalArn': !GetAtt EvidenceWriterRole.Arn}}
+          - Sid: DenyReplicationWrites
+            Effect: Deny
+            Principal: '*'
+            Action: ['s3:ReplicateObject', 's3:ReplicateDelete']
+            Resource: !Sub '${EvidenceBucket.Arn}/*'
+          - Sid: DenyDeletesAndRetentionChanges
+            Effect: Deny
+            Principal: '*'
+            Action: ['s3:DeleteObject', 's3:DeleteObjectVersion', 's3:PutObjectRetention', 's3:PutObjectLegalHold', 's3:BypassGovernanceRetention']
+            Resource: !Sub '${EvidenceBucket.Arn}/*'
+            Condition: !If [HasErasurePrincipal, {ArnNotEquals: {'aws:PrincipalArn': !Ref EvidenceErasurePrincipalArn}}, !Ref 'AWS::NoValue']
+          - !If [HasErasurePrincipal, {Sid: ConfineErasureToOneKey, Effect: Deny, Principal: '*', Action: ['s3:DeleteObject', 's3:DeleteObjectVersion', 's3:PutObjectRetention', 's3:PutObjectLegalHold', 's3:BypassGovernanceRetention'], NotResource: !If [HasErasureKey, !Sub '${EvidenceBucket.Arn}/${EvidenceErasureObjectKey}', !GetAtt EvidenceBucket.Arn], Condition: {ArnEquals: {'aws:PrincipalArn': !Ref EvidenceErasurePrincipalArn}}}, !Ref 'AWS::NoValue']
+
+  EvidenceWriterPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub ${OrgPrefix}-${AppName}-evidence-writer-${EnvironmentName}
+      Description: !Sub Evidence store producers - write-once uploads to the store prefixes (deploy/aws/trust-portal.yaml, stack ${AWS::StackName}).
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: WriteEvidence
+            Effect: Allow
+            Action: s3:PutObject
+            Resource:
+              - !Sub '${EvidenceBucket.Arn}/decision-logs/*'
+              - !Sub '${EvidenceBucket.Arn}/codex-reviews/*'
+              - !Sub '${EvidenceBucket.Arn}/pentest-evidence/*'
+              - !Sub '${EvidenceBucket.Arn}/pentest-reports/*'
+              - !Sub '${EvidenceBucket.Arn}/evidence/artifacts/*'
+
+  EvidenceWriterRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${OrgPrefix}-user-${AppName}-evidence-writer-${EnvironmentName}
+      Path: /
+      Description: !Sub Evidence store upload role of EvidenceWriterPrincipalArns (deploy/aws/trust-portal.yaml, stack ${AWS::StackName}).
+      MaxSessionDuration: 3600
+      ManagedPolicyArns: [!Ref EvidenceWriterPolicy]
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: TrustNamedProducers
+            Effect: Allow
+            Principal: {AWS: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root'}
+            Action: sts:AssumeRole
+            Condition: !If [HasWriterPrincipals, {StringEquals: {'aws:PrincipalArn': !Ref EvidenceWriterPrincipalArns}}, {'Null': {'aws:PrincipalArn': 'true'}}]
+
+  EvidenceWriterAssumePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub ${OrgPrefix}-${AppName}-evidence-writer-assume-${EnvironmentName}
+      Description: !Sub Evidence store producers - assume the evidence writer role (deploy/aws/trust-portal.yaml, stack ${AWS::StackName}).
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AssumeEvidenceWriterRole
+            Effect: Allow
+            Action: sts:AssumeRole
+            Resource: !GetAtt EvidenceWriterRole.Arn
 
   SnapshotRole:
     Type: AWS::IAM::Role
@@ -904,6 +1087,10 @@ Outputs:
   RuntimeRoleExternalId: {Value: !Select [2, !Split ['/', !Ref 'AWS::StackId']]}
   LogGroupName: {Value: !Ref LogGroup}
   ArchiveBucketName: {Value: !Ref ArchiveBucket}
+  EvidenceBucketName: {Value: !Ref EvidenceBucket}
+  EvidenceWriterPolicyArn: {Value: !Ref EvidenceWriterPolicy}
+  EvidenceWriterRoleArn: {Value: !GetAtt EvidenceWriterRole.Arn}
+  EvidenceWriterAssumePolicyArn: {Value: !Ref EvidenceWriterAssumePolicy}
   ImageRepositoryUri:
     Condition: UseEcr
     Value: !GetAtt ImageRepository.RepositoryUri

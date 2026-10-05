@@ -38,19 +38,42 @@ Who may extend a session (``authority``)
 ----------------------------------------
 * ``system`` - a git sync of the evidence repository, ``cli import`` and the
   local ``decision-logs/`` ingest: the evidence repository is the source of
-  the transcripts, so it may extend any session.
+  the transcripts, so it may extend any session (and wins the conflicts
+  below).
+* ``store`` - an evidence-store sync, naming the ``evidence_store_objects``
+  record of the object version it read: may create a session and extend any
+  session as an exact prefix extension, and nothing else (below).
 * ``admin`` - an upload by a compliance admin: may extend any session.
 * ``member`` - an upload by any other member: may extend only a session whose
   ``submitted_by`` is that member and that is not flagged as a conflict. A
   session created without a submitter (a scheduled git sync) is extended
-  only by the system or an admin.
+  only by the system, the store or an admin.
 
-Once the evidence repository has supplied entries of a session
-(``repository_entries`` > 0), only the repository may extend it: an upload
-by a member or an admin that would add entries is rejected (409) and kept
-as a ``rejected`` version (audited). Stored entries after the ones the
-repository supplied are UNCONFIRMED: they never count as verifications
-(:func:`confirmed_entry_limit`).
+The evidence store (``store``)
+------------------------------
+A store export creates a session that does not exist, or extends the stored
+entries when they are an exact prefix of its entries and it has more. An
+identical export (the same content or the same entries) and an export whose
+entries are a prefix of the stored ones change nothing (``unchanged`` /
+``kept_existing``). Any other export - one that differs from the stored
+entries at any entry - is **rejected** and kept as a ``rejected`` version for
+review: a store export never replaces, truncates or supersedes entries,
+whether they came through the API or from the evidence repository, and never
+wins a conflict. Store exports are held to the same timestamp rule as
+repository exports (none: an agent transcript is in write order) and fill
+only unset session metadata. A stored session without a current version (a
+session restored from an earlier portal) that a store export holds
+identically is BASELINED, as a full re-import of the evidence repository
+does: the export is recorded as the session's current version (naming its
+store object; audited; no entry rows written; ``DecisionLogResult.baselined``),
+and the store has supplied its entries from then on.
+
+Once the evidence repository or the evidence store has supplied entries of a
+session (``repository_entries`` > 0, counting the entries either supplied),
+only they may extend it: an upload by a member or an admin that would add
+entries is rejected (409) and kept as a ``rejected`` version (audited).
+Stored entries after the ones they supplied are UNCONFIRMED: they never
+count as verifications (:func:`confirmed_entry_limit`).
 
 Entries appended through the API (``member`` or ``admin`` authority) must
 not be back-dated: every appended entry that carries a timestamp must not be
@@ -67,11 +90,11 @@ when it does not, to the conflict rules below.
 The evidence repository is authoritative
 ----------------------------------------
 ``repository_entries`` counts the leading stored entries that a version from
-the evidence repository (``system`` authority) created, extended or replaced;
-the entries after them came through the API. (For a session stored before
-the count was recorded it is all stored entries when the session has no
-submitter, else none.) The repository's version wins - a **conflict** - when
-a ``system`` version
+the evidence repository (``system`` authority) or the evidence store
+(``store``) created, extended or replaced; the entries after them came
+through the API. (For a session stored before the count was recorded it is
+all stored entries when the session has no submitter, else none.) The
+repository's version wins - a **conflict** - when a ``system`` version
 
 * differs from the stored entries at an entry the repository has not
   supplied: the stored entries from the first difference on are replaced by
@@ -230,8 +253,8 @@ import sqlalchemy as sa
 
 from app.models import DecisionLogEntry, DecisionLogSession, DecisionLogTranscript, db
 from app.services import chunked_files
-from app.services.transcript_ingest import TranscriptLimitError, escape_surrogates, normalize_agent_type, \
-    parse_transcript, same_tool_calls
+from app.services.transcript_ingest import TranscriptLimitError, clean_text, escape_surrogates, \
+    normalize_agent_type, parse_transcript, same_tool_calls
 
 logger = logging.getLogger(__name__)
 
@@ -240,8 +263,8 @@ JSONL_SUFFIX = ".jsonl"
 META_SUFFIX = ".meta.json"
 RECONSTRUCTION_FORMAT = "decision-log-reconstruction/v1"
 SUPERSEDED_REASON = "superseded by a longer export that extends it"
-REPOSITORY_OWNED_REASON = ("the evidence repository holds this session; only the repository may extend it "
-                           "(the upload is kept as a rejected version)")
+REPOSITORY_OWNED_REASON = ("the evidence repository or the evidence store holds this session; only they may "
+                           "extend it (the upload is kept as a rejected version)")
 FORBIDDEN_REASON = ("only the member who submitted this session or a compliance admin may extend it; "
                     "the stored transcript is unchanged")
 MAX_TRANSCRIPT_BYTES = 32 * 1024 * 1024
@@ -251,9 +274,12 @@ CONFLICT_REASON_PREFIX = "repository conflict: "
 ENTRY_FOREIGN_KEY = "fk_decision_log_entries_session"
 SESSION_LOCK_CLASS = 0x444C4F47  # first key of the per-session advisory lock ("DLOG")
 AUTHORITY_SYSTEM = "system"
+AUTHORITY_STORE = "store"
 AUTHORITY_ADMIN = "admin"
 AUTHORITY_MEMBER = "member"
-AUTHORITIES = (AUTHORITY_SYSTEM, AUTHORITY_ADMIN, AUTHORITY_MEMBER)
+AUTHORITIES = (AUTHORITY_SYSTEM, AUTHORITY_STORE, AUTHORITY_ADMIN, AUTHORITY_MEMBER)
+# The sources of transcripts: their entries count in ``repository_entries``.
+SOURCE_AUTHORITIES = (AUTHORITY_SYSTEM, AUTHORITY_STORE)
 _INSERT_BATCH = 1000
 _INSERT_BATCH_TEXT = 4 * 1024 * 1024
 _COMPARE_BATCH = 1000
@@ -370,7 +396,9 @@ class DecisionLogResult:
     True for a rejection because the upload's authority may not extend the
     session; ``conflict`` is True when a repository version replaced
     entries submitted through the API; ``agent_type`` is the session's agent
-    label (for a new session, the one it is created with).
+    label (for a new session, the one it is created with);
+    ``submitted_entries`` is the number of entries parsed from the submitted
+    content (None when it was not parsed: its digest equals the stored one).
     """
 
     status: str
@@ -383,6 +411,7 @@ class DecisionLogResult:
     conflict: bool = False
     baselined: bool = False
     agent_type: str | None = None
+    submitted_entries: int | None = None
 
 
 def session_lock_key(session_id: str) -> int:
@@ -463,12 +492,16 @@ def _utc(value):
     return value.astimezone(timezone.utc)
 
 
-def _fit(column, value):
-    """Truncate informational text to its column's length."""
+def clean_metadata(column, value):
+    """Informational session text as its column stores it: NUL characters and
+    unpaired surrogates replaced by U+FFFD (``transcript_ingest.clean_text``),
+    then cut to the column's length. A value that is not text is returned as
+    it is."""
+    if not isinstance(value, str):
+        return value
+    value = clean_text(value)
     length = getattr(DecisionLogSession.__table__.columns[column].type, "length", None)
-    if isinstance(value, str) and length and len(value) > length:
-        return value[:length]
-    return value
+    return value[:length] if length and len(value) > length else value
 
 
 def _text(value):
@@ -638,12 +671,12 @@ def _first_backdated(entries, start, latest):
 def _metadata(parsed, source_path, exit_reason):
     """The session metadata an upload supplies (None where it supplies none)."""
     return {
-        "model": _fit("model", parsed.model),
-        "cwd": _fit("cwd", parsed.cwd),
-        "git_branch": _fit("git_branch", parsed.git_branch),
+        "model": clean_metadata("model", parsed.model),
+        "cwd": clean_metadata("cwd", parsed.cwd),
+        "git_branch": clean_metadata("git_branch", parsed.git_branch),
         "started_at": _naive_utc(parsed.started_at),
-        "exit_reason": _fit("exit_reason", exit_reason),
-        "transcript_path": _fit("transcript_path", source_path),
+        "exit_reason": clean_metadata("exit_reason", exit_reason),
+        "transcript_path": clean_metadata("transcript_path", source_path),
     }
 
 
@@ -687,9 +720,10 @@ def _has_current_version(session_id) -> bool:
 
 
 def _baseline(session, sha, size, source_path, count, digest):
-    """Record the repository's identical copy of a stored session that has no
-    current version (a session restored from an earlier portal) as its current,
-    repository-import version - with the git sync's commit - writing no entry rows."""
+    """Record the repository's or the store's identical copy of a stored session
+    that has no current version (a session restored from an earlier portal) as
+    its current version - a repository import with the git sync's commit, or a
+    store import naming its store object - writing no entry rows."""
     _attribute_writes()
     session.repository_entries = count
     session.content_sha256 = sha
@@ -715,7 +749,7 @@ def confirmed_entry_limit(session, stored):
 
 
 def _may_extend(session, authority, submitted_by):
-    if authority in (AUTHORITY_SYSTEM, AUTHORITY_ADMIN):
+    if authority in (AUTHORITY_SYSTEM, AUTHORITY_STORE, AUTHORITY_ADMIN):
         return True
     return (session.submitted_by is not None and session.submitted_by == submitted_by
             and session.conflict_at is None)
@@ -726,6 +760,11 @@ def _may_extend(session, authority, submitted_by):
 # writes records it, so ``decision_log_repo_verify`` can fetch that version
 # from the repository.
 _SOURCE_COMMIT = contextvars.ContextVar("decision_log_source_commit", default=None)
+# The evidence-store object the current import reads (set by an evidence-store
+# sync through ``import_decision_log(store_object_id=...)``); every version the
+# import writes records it, so ``audit-verify --against-store`` can check that
+# version against its object.
+_STORE_OBJECT = contextvars.ContextVar("decision_log_store_object", default=None)
 
 
 def _version(session_id, status, *, sha, size, entries, source_path=None, submitted_by=None,
@@ -733,8 +772,9 @@ def _version(session_id, status, *, sha, size, entries, source_path=None, submit
     row = DecisionLogTranscript(
         id=str(uuid.uuid4()), session_id=session_id, status=status, content_sha256=sha,
         content_bytes=size, entry_count=entries, entries_sha256=digest, content_gz=content_gz,
-        reason=reason, source_path=_fit("transcript_path", source_path), submitted_by=submitted_by,
-        source_commit=_SOURCE_COMMIT.get() if status != "superseded" else None)
+        reason=reason, source_path=clean_metadata("transcript_path", source_path), submitted_by=submitted_by,
+        source_commit=_SOURCE_COMMIT.get() if status != "superseded" else None,
+        store_object_id=_STORE_OBJECT.get() if status != "superseded" else None)
     if received_at is not None:
         row.received_at = received_at
     db.session.add(row)
@@ -859,7 +899,7 @@ def _extend(session, parsed, comparison, sha, size, source_path, exit_reason, su
     _apply_session_fields(session, parsed, sha, size, source_path, exit_reason,
                           replace=authority == AUTHORITY_ADMIN)
     session.replaced_at = datetime.now(timezone.utc)
-    session.repository_entries = len(parsed.entries) if authority == AUTHORITY_SYSTEM else repository
+    session.repository_entries = len(parsed.entries) if authority in SOURCE_AUTHORITIES else repository
     _version(session.id, "current", sha=sha, size=size, entries=len(parsed.entries),
              source_path=source_path, submitted_by=submitted_by, digest=digest)
     db.session.flush()
@@ -942,7 +982,8 @@ def _record_rejected(session_id, content, sha, size, entries, reason, source_pat
 
 def import_decision_log(content, *, session_id=None, source_path=None, exit_reason=None,
                         submitted_by=None, authority=AUTHORITY_SYSTEM,
-                        dry_run=False, source_commit=None, agent_type=None) -> DecisionLogResult:
+                        dry_run=False, source_commit=None, agent_type=None,
+                        store_object_id=None, parsed=None) -> DecisionLogResult:
     """Store one transcript according to the rules in the module docstring.
 
     ``content`` is the raw transcript bytes (text is encoded as UTF-8); the
@@ -953,8 +994,9 @@ def import_decision_log(content, *, session_id=None, source_path=None, exit_reas
     is absent or unusable, with the transcript's detected format's agent; a
     stored session keeps its label.
     ``submitted_by`` is the member the new version (and a new session) is
-    attributed to; ``authority`` (``system``, ``admin`` or ``member``, which
-    needs ``submitted_by``) decides who may extend a stored session. Holds an
+    attributed to; ``authority`` (``system``, ``store``, ``admin`` or
+    ``member``, which needs ``submitted_by``) decides who may extend a stored
+    session. Holds an
     import slot (:func:`import_slot`, waiting for one unless the thread holds
     one), takes the session lock, flushes, does not commit (a rejection's
     version row is part of the flush); ``dry_run`` decides the status
@@ -963,19 +1005,31 @@ def import_decision_log(content, *, session_id=None, source_path=None, exit_reas
     :class:`TranscriptLimitError` (a ValueError) for a transcript over a
     limit (:class:`TranscriptTooLargeError` above
     :data:`MAX_TRANSCRIPT_BYTES`). ``source_commit`` (a git sync's commit,
-    ``system`` authority only) is recorded on every version the import writes.
+    ``system`` authority only) is recorded on every version the import writes;
+    so is ``store_object_id`` (the ``evidence_store_objects`` id of the object
+    version an evidence-store sync read; required by, and only accepted with,
+    the ``store`` authority; the caller writes that row in the same
+    transaction). Either one makes ``source_path`` subject to the path rule:
+    it must be the session's own ``<timestamp>_<session id>.jsonl``.
+    ``parsed`` is ``content`` already parsed by ``parse_transcript`` (the
+    evidence store's content check parses it before its transaction); the
+    import then does not parse it again.
     """
+    if (authority == AUTHORITY_STORE) != bool(store_object_id):
+        raise ValueError("an evidence-store import names its store object, and only the store authority does")
     token = _SOURCE_COMMIT.set(source_commit if authority == AUTHORITY_SYSTEM else None)
+    store_token = _STORE_OBJECT.set(store_object_id if authority == AUTHORITY_STORE else None)
     try:
         return _import_decision_log(content, session_id=session_id, source_path=source_path,
                                     exit_reason=exit_reason, submitted_by=submitted_by, authority=authority,
-                                    dry_run=dry_run, agent_type=agent_type)
+                                    dry_run=dry_run, agent_type=agent_type, parsed=parsed)
     finally:
+        _STORE_OBJECT.reset(store_token)
         _SOURCE_COMMIT.reset(token)
 
 
 def _import_decision_log(content, *, session_id, source_path, exit_reason, submitted_by, authority, dry_run,
-                         agent_type):
+                         agent_type, parsed=None):
     if isinstance(content, str):
         content = content.encode("utf-8")
     if not isinstance(content, (bytes, bytearray)):
@@ -985,7 +1039,8 @@ def _import_decision_log(content, *, session_id, source_path, exit_reason, submi
     if authority == AUTHORITY_MEMBER and not submitted_by:
         raise ValueError("a member's upload must name its submitter")
     sid = session_id or session_id_from_path(source_path)
-    if authority == AUTHORITY_SYSTEM and _SOURCE_COMMIT.get() is not None and session_id_from_path(source_path) != sid:
+    bound_to_source = _SOURCE_COMMIT.get() is not None or _STORE_OBJECT.get() is not None
+    if authority in SOURCE_AUTHORITIES and bound_to_source and session_id_from_path(source_path) != sid:
         raise ValueError(f"repository path {source_path} is not session {sid}'s file "
                          "(<timestamp>_<session id>.jsonl)")
     if not sid:
@@ -999,18 +1054,19 @@ def _import_decision_log(content, *, session_id, source_path, exit_reason, submi
     with import_slot(size=size):
         return _import(content, sid, hashlib.sha256(content).hexdigest(), size, source_path=source_path,
                        exit_reason=exit_reason, submitted_by=submitted_by, authority=authority,
-                       dry_run=dry_run, named_agent=normalize_agent_type(agent_type))
+                       dry_run=dry_run, named_agent=normalize_agent_type(agent_type), preparsed=parsed)
 
 
 def _import(content, sid, sha, size, *, source_path, exit_reason, submitted_by, authority, dry_run,
-            named_agent):
+            named_agent, preparsed=None):
     new_agent = None  # the label a session this call creates gets
 
     def result(status, entries, reason=None, forbidden=False, conflict=False, baselined=False):
         return DecisionLogResult(status=status, session_id=sid, entries=entries, content_sha256=sha,
                                  content_bytes=size, reason=reason, forbidden=forbidden, conflict=conflict,
                                  baselined=baselined,
-                                 agent_type=session.agent_type if session is not None else new_agent)
+                                 agent_type=session.agent_type if session is not None else new_agent,
+                                 submitted_entries=len(parsed.entries) if parsed is not None else None)
 
     def reject(reason, stored, entries, forbidden=False):
         if not dry_run:
@@ -1021,19 +1077,19 @@ def _import(content, sid, sha, size, *, source_path, exit_reason, submitted_by, 
         lock_session(sid)
         _defer_entry_checks()
     session = db.session.get(DecisionLogSession, sid)
-    parsed = None
+    parsed = preparsed
     if session is None:
-        parsed = parse_transcript(content)
+        parsed = parsed or parse_transcript(content)
         new_agent = named_agent or parsed.agent_type
         if dry_run:
             return result("created", len(parsed.entries))
-        repository = len(parsed.entries) if authority == AUTHORITY_SYSTEM else 0
+        repository = len(parsed.entries) if authority in SOURCE_AUTHORITIES else 0
         if _create(sid, parsed, sha, size, source_path, exit_reason, submitted_by, repository, new_agent):
             return result("created", len(parsed.entries))
         # Another transaction created the session first: store against it.
         session = db.session.get(DecisionLogSession, sid, populate_existing=True)
 
-    unbaselined = authority == AUTHORITY_SYSTEM and not _has_current_version(sid)
+    unbaselined = authority in SOURCE_AUTHORITIES and not _has_current_version(sid)
     if session.content_sha256 == sha and not unbaselined:
         return result("unchanged", _stored_entry_count(sid))
 
@@ -1046,21 +1102,21 @@ def _import(content, sid, sha, size, *, source_path, exit_reason, submitted_by, 
                                       submitted_by)
         return result("replaced", len(parsed.entries), conflict=True)
     if difference is None and unbaselined and len(parsed.entries) == stored:
-        # A stored session (restored from an earlier portal) that the repository holds
-        # identically: record the repository's copy as its current version (a baseline).
+        # A stored session (restored from an earlier portal) that the repository or the
+        # store holds identically: record that copy as its current version (a baseline).
         if not dry_run:
             _baseline(session, sha, size, source_path, stored, comparison.stored_sha256)
         return result("unchanged", stored, baselined=True)
-    if difference is not None:
+    if difference is not None:  # a store export never replaces stored entries (module docstring)
         return reject(f"entry {difference + 1} differs from the stored transcript of {stored} entries; "
                       "a new export must extend the stored transcript", stored, len(parsed.entries))
     permitted = _may_extend(session, authority, submitted_by)
     if len(parsed.entries) > stored:
         if not permitted:
             return reject(FORBIDDEN_REASON, stored, len(parsed.entries), forbidden=True)
-        if authority != AUTHORITY_SYSTEM and _repository_entries(session, stored) > 0:
+        if authority not in SOURCE_AUTHORITIES and _repository_entries(session, stored) > 0:
             return reject(REPOSITORY_OWNED_REASON, stored, len(parsed.entries))
-        latest = _latest_stored_timestamp(sid) if authority != AUTHORITY_SYSTEM else None
+        latest = _latest_stored_timestamp(sid) if authority not in SOURCE_AUTHORITIES else None
         backdated = _first_backdated(parsed.entries, stored, latest) if latest is not None else None
         if backdated is not None:
             stamp = _utc(parsed.entries[backdated]["timestamp"]).isoformat()
@@ -1070,7 +1126,8 @@ def _import(content, sid, sha, size, *, source_path, exit_reason, submitted_by, 
         if not dry_run:
             _extend(session, parsed, comparison, sha, size, source_path, exit_reason, submitted_by, authority)
         return result("replaced", len(parsed.entries))
-    if len(parsed.entries) == stored and session.content_sha256 is None and permitted:
+    if len(parsed.entries) == stored and session.content_sha256 is None and permitted \
+            and authority != AUTHORITY_STORE:  # a store export that holds nothing new changes nothing
         if not dry_run:
             if authority == AUTHORITY_SYSTEM:
                 session.repository_entries = stored

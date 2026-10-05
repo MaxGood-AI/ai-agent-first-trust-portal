@@ -39,14 +39,18 @@ service's length limit.
 | Lightsail PostgreSQL database `…-db-<env>` | Private, automatic backups (7-day point-in-time restore). Created with the master user (`DatabaseMasterUsername`) as owner of the database and of schema `public`, so the portal's provisioning can revoke `TEMPORARY` and `CREATE` from `PUBLIC`; the portal serves as a separate role (`DatabaseAppUsername`, which a Rule keeps different) |
 | Lightsail certificate and custom domain | When `DomainName` is set; attached with `AttachCustomDomain=true`; CNAME in Route 53 when `HostedZoneId` is set |
 | IAM user `…-<env>` + access key | The base credential in the container; its one permission is `sts:AssumeRole` on the runtime role |
-| IAM role `<org>-user-<app>-<env>` | Runtime role, trusting the user with an external id (the stack's id). Grants exactly what the portal calls: the collector policy (`iam/trust-portal-collector-policy.json`), CodeCommit `GetBranch`/`GetCommit`/`GetDifferences`/`GetFile`/`GetBlob` on the governance and evidence repositories, `GetSecretValue` on the runtime secret, `CreateLogStream`/`PutLogEvents` on the log group, `s3:PutObject` on `<archive bucket>/chain-heads/*` (its only S3 write, and only with SSE-S3: SSE-KMS and SSE-C writes are denied, so every auditor can read the heads; an explicit deny covers `archives/*`), and for the API's anchor check `s3:ListBucketVersions` (prefixes `archives/`, `chain-heads/`) with `s3:GetObject`/`s3:GetObjectVersion` on `archives/*.manifest.json` and `chain-heads/*`. With `CollectorAssumableRoleArns` set, also `sts:AssumeRole` on exactly those roles (collectors in credential mode `task_role_assume`) |
-| Secret `…-<env>` | Runtime secret: `SECRET_KEY`, `DATABASE_PASSWORD`, `BOOTSTRAP_TOKEN` (43 characters), `COLLECTOR_ENCRYPTION_KEYS` (generated) and `CLOUDWATCH_LOG_GROUP`. It never holds owner credentials or `AUDIT_WITNESS_BUCKET`. Operators add `GITHUB_TOKEN` with `set-secret-key.sh` |
+| IAM role `<org>-user-<app>-<env>` | Runtime role, trusting the user with an external id (the stack's id). Grants exactly what the portal calls: the collector policy (`iam/trust-portal-collector-policy.json`), CodeCommit `GetBranch`/`GetCommit`/`GetDifferences`/`GetFile`/`GetBlob` on the governance and evidence repositories, `GetSecretValue` on the runtime secret, `CreateLogStream`/`PutLogEvents` on the log group, `s3:PutObject` on `<archive bucket>/chain-heads/*` (its only S3 write, and only with SSE-S3: SSE-KMS and SSE-C writes are denied, so every auditor can read the heads; an explicit deny covers `archives/*`), and for the API's anchor check `s3:ListBucketVersions` (prefixes `archives/`, `chain-heads/`) with `s3:GetObject`/`s3:GetObjectVersion` on `archives/*.manifest.json` and `chain-heads/*`. For the evidence store: `s3:ListBucketVersions`, `s3:GetBucketVersioning`, `s3:GetBucketObjectLockConfiguration`, `s3:GetBucketPolicy` and `s3:GetLifecycleConfiguration` on the evidence bucket and `s3:GetObject`/`s3:GetObjectVersion`/`s3:GetObjectRetention` on its objects, with every write, delete, retention, ACL and tagging action on the bucket and its objects explicitly denied. With `CollectorAssumableRoleArns` set, also `sts:AssumeRole` on exactly those roles (collectors in credential mode `task_role_assume`) |
+| Secret `…-<env>` | Runtime secret: `SECRET_KEY`, `DATABASE_PASSWORD`, `BOOTSTRAP_TOKEN` (43 characters), `COLLECTOR_ENCRYPTION_KEYS` (generated) and `CLOUDWATCH_LOG_GROUP`. It never holds owner credentials, `AUDIT_WITNESS_BUCKET` or `EVIDENCE_STORE_BUCKET`. Operators add `GITHUB_TOKEN` with `set-secret-key.sh` |
 | Secret `…-db-owner-<env>` | `DATABASE_OWNER_USER` and the generated `DATABASE_OWNER_PASSWORD` (the database master password). Read only at deploy; `deploy.sh` passes both to the container, whose entrypoint uses them for migrations and removes them before the server starts |
 | Secret `…-credentials-<env>` | The user's access key, read by `deploy.sh` into the container environment |
 | Log group `/lightsail/…-<env>` | Application and access logs, with `LogRetentionDays` |
-| S3 bucket `…-archive-<env>-<account>-<region>` | Object Lock in compliance mode for `ArchiveRetentionYears`, versioned, encrypted, private, TLS only; the bucket policy denies object deletes and retention or lock changes to everyone, and denies object creation under `chain-heads/` and `archives/` without `If-None-Match` (condition key `s3:if-none-match`), so a published head, archive or manifest can never be replaced; aborts incomplete multipart uploads after 7 days; moves to Glacier Instant Retrieval after 30 days. Holds the audit chain heads under `chain-heads/` and the archives and their manifests under `archives/` |
+| S3 bucket `…-archive-<env>-<account>-<region>` | Object Lock in compliance mode for `ArchiveRetentionYears`, versioned, encrypted, private, TLS only; the bucket policy denies object deletes, replication writes (`s3:ReplicateObject`, `s3:ReplicateDelete`) and retention or lock changes to everyone, and denies object creation under `chain-heads/` and `archives/` without `If-None-Match` (condition key `s3:if-none-match`), so a published head, archive or manifest can never be replaced; aborts incomplete multipart uploads after 7 days; moves to Glacier Instant Retrieval after 30 days. Holds the audit chain heads under `chain-heads/` and the archives and their manifests under `archives/` |
 | IAM managed policy `…-witness-verifier-<env>` | Read-only access to the heads and archives, every version, for auditors (see *The audit chain witness and archives*) |
 | IAM managed policy `…-archive-operator-<env>` | The cutover operator's access: upload archives and manifests, publish the archived chain's final head, read both prefixes |
+| S3 bucket `…-evstore-<env>-<account>-<region>` | The evidence store (see *The evidence store*): Object Lock in governance mode for `EvidenceRetentionYears`, versioned, SSE-S3 with SSE-C blocked, private, owner-enforced, TLS only; the bucket policy denies every write without `If-None-Match`, with SSE-C or another encryption than SSE-S3, or with a storage class other than `STANDARD`, denies object creation under the five store key prefixes to every principal but the evidence writer role, denies replication writes (`s3:ReplicateObject`, `s3:ReplicateDelete`) to everyone, and denies object deletes, retention and legal-hold changes and governance bypass to everyone, `EvidenceErasurePrincipalArn` excepted only on the object `EvidenceErasureObjectKey` names while both are set; aborts incomplete multipart uploads after 1 day; no storage-class transitions |
+| IAM managed policy `…-evidence-writer-<env>` | The evidence writer role's permission policy: `s3:PutObject` on the store's five key prefixes, nothing else (`EvidenceWriterPolicyArn`) |
+| IAM role `<org>-user-<app>-evidence-writer-<env>` | The role every producer uploads as, the one principal the bucket policy lets create objects under the store prefixes (`EvidenceWriterRoleArn`): holds only the evidence writer policy, trusts only the IAM users and roles of the stack's account named in `EvidenceWriterPrincipalArns` (empty: nobody), one-hour sessions |
+| IAM managed policy `…-evidence-writer-assume-<env>` | `sts:AssumeRole` on the evidence writer role and nothing else, for producer users and groups (`EvidenceWriterAssumePolicyArn`) |
 | Lambda `…-db-snapshot-<env>` + schedule | Daily snapshot `<db>-YYYYMMDD-HHMMSS`, tagged `trust-portal-stack=<stack id>`; deletes this stack's tagged snapshots of that shape once `available` and older than `SnapshotRetentionDays`, always keeping the newest `SnapshotMinimumKept` (default 7) |
 | ECR repository `<org>-<app>-<env>` | `ImageSource=ecr`: scan on push, immutable tags, keeps the 30 newest images |
 
@@ -60,8 +64,9 @@ blank is regenerated only when it is safe to (`SECRET_KEY`, `DATABASE_PASSWORD`,
 `BOOTSTRAP_TOKEN`); a blank or deleted `DATABASE_OWNER_PASSWORD` or
 `COLLECTOR_ENCRYPTION_KEYS`, or a secret that no longer holds a JSON object,
 fails the stack update with a message naming the key, and nothing is written.
-The database, both secrets, the log group, the ECR repository and the archive
-bucket are retained when the stack is deleted.
+The database, both secrets, the log group, the ECR repository, the archive
+bucket and the evidence store bucket, and the two buckets' policies, are
+retained when the stack is deleted.
 
 The core stack exports `OrgPrefix`, `AppName`, `EnvironmentName`,
 `ContainerServiceArn`, `CredentialsSecretArn`, `OwnerSecretArn`,
@@ -93,8 +98,9 @@ to the stack's region.
 Parameters go in JSON files of the form
 `[{"ParameterKey": "OrgPrefix", "ParameterValue": "acme"}, …]`; see each
 template's `Parameters` for every key and its default. Leave `AttachCustomDomain`,
-`AccessKeySerial` and `WitnessArmed` out of the main files: a later step
-overrides only that key, and the other values carry over.
+`AccessKeySerial`, `EvidenceErasurePrincipalArn`, `EvidenceErasureObjectKey`, `EvidenceWriterPrincipalArns` and `WitnessArmed` out of the
+main files: a later step overrides only that key, and the other values carry
+over.
 
 1. **Deploy the core stack.** The database takes 15–20 minutes; the
    certificate is created within the first minutes.
@@ -290,6 +296,329 @@ bucket policy denies a write without it; a write to an existing key fails with
     --alarm-actions <sns topic arn>
   ```
 
+## The evidence store
+
+The evidence store is the core stack's `…-evstore-<env>-<account>-<region>`
+bucket (`EvidenceBucketName` output): producers upload each evidence file
+once, nothing deletes or replaces it, and the portal imports and verifies
+every object version through its runtime role. The contract producers and the
+portal follow (key prefixes, `If-None-Match: *`, the SHA-256 checksum,
+metadata, the redaction gate for decision logs, import and verification) is
+`docs/evidence-repo-spec.md` → "Evidence store".
+
+| Parameter | Default | Purpose |
+|-----------|---------|---------|
+| `EvidenceRetentionYears` | `7` | Object Lock governance-mode retention of every object version (1–100 years) |
+| `EvidenceErasurePrincipalArn` | empty | The one IAM role or user exempt from the bucket policy's delete, retention, legal-hold and bypass denials, on the one object `EvidenceErasureObjectKey` names; set only for a documented erasure and cleared afterwards |
+| `EvidenceErasureObjectKey` | empty | The key of the one object (every version of it) the erasure principal may erase, no `*`, `?` or `$`; empty, the erasure principal is denied on every object. Set and cleared with `EvidenceErasurePrincipalArn` |
+| `EvidenceWriterPrincipalArns` | empty | The IAM users and roles (comma-separated ARNs as IAM shows them, path included) that may assume the evidence writer role; empty, nobody assumes it |
+
+- **The portal reads it, never writes it.** `deploy.sh` gives the container
+  `EVIDENCE_STORE_BUCKET` on every run, whatever its witness flag, from the
+  core stack's `EvidenceBucketName` output (so the core stack carries this
+  template before the first deployment of an image that reads it). The runtime
+  secret never carries it (the stack removes it, and `set-secret-key.sh`
+  refuses it), so the environment is its only source. The runtime role lists
+  object versions, reads them with their retention, and reads the bucket's
+  versioning, Object Lock configuration, bucket policy and lifecycle
+  configuration; every write, delete, retention, ACL and tagging action on
+  the bucket is explicitly denied to it.
+- **Every producer uploads through the writer role.** The core stack's role
+  `<org>-user-<app>-evidence-writer-<env>` (`EvidenceWriterRoleArn` output)
+  holds the evidence writer policy (`EvidenceWriterPolicyArn` output) and
+  nothing else: `s3:PutObject` on the five store prefixes. The bucket policy
+  statement `OnlyTheWriterRoleWritesEvidence` denies `s3:PutObject` under
+  those prefixes to every principal whose `aws:PrincipalArn` is not the
+  role's ARN, account administrators included; a session of the role
+  carries the role's ARN as its `aws:PrincipalArn`. So the role's sessions
+  are the only writers of evidence, a non-human producer's included, and
+  the writer policy grants writes as the role's permission policy. The
+  role's sessions add objects to the store and can read, list, delete,
+  re-lock, tag or change nothing, whatever the producer's own identity may
+  do. Its trust policy (statement `TrustNamedProducers`) admits an
+  `AssumeRole` only from an IAM user or role of the stack's account whose
+  `aws:PrincipalArn` is one of `EvidenceWriterPrincipalArns` (`StringEquals`,
+  exact ARNs; a group is never a principal, so each producer's own user or
+  role is named); with the parameter empty, the default, nobody assumes it.
+  A named identity also holds `sts:AssumeRole` on the role's ARN, and the
+  role's sessions last at most one hour. Set up each producer, a person or
+  a non-human producer identity, in four steps:
+
+  1. Name the producer's IAM user or role: deploy the core stack with a
+     parameter file holding only `EvidenceWriterPrincipalArns`, every
+     producer's ARN as IAM shows it (path included), comma-separated in one
+     `ParameterValue` (the list replaces the previous one):
+
+     ```bash
+     aws cloudformation deploy --region <region> --stack-name <core stack> \
+       --template-file deploy/aws/trust-portal.yaml --capabilities CAPABILITY_NAMED_IAM \
+       --parameter-overrides file://<writer-principals.json>
+     ```
+
+  2. Grant the producer's identity `sts:AssumeRole` on the role: attach the
+     `EvidenceWriterAssumePolicyArn` output (that one action on that one role)
+     to the producer's IAM user, or to a group of producers. Outside this
+     template, use `iam/trust-portal-evidence-writer-assume-policy.json` with
+     `ACCOUNT_ID` and `EVIDENCE_WRITER_ROLE` replaced. Read the ARN:
+
+     ```bash
+     aws cloudformation describe-stacks --region <region> --stack-name <core stack> \
+       --query "Stacks[0].Outputs[?OutputKey=='EvidenceWriterAssumePolicyArn'].OutputValue | [0]" --output text
+     ```
+
+     then attach it to the user or to the group:
+
+     ```bash
+     aws iam attach-user-policy --user-name <producer user> --policy-arn <EvidenceWriterAssumePolicyArn>
+     ```
+
+     ```bash
+     aws iam attach-group-policy --group-name <producer group> --policy-arn <EvidenceWriterAssumePolicyArn>
+     ```
+
+  3. On each workstation or host the producer uploads from, create an AWS
+     CLI profile that assumes the role from the producer identity's own
+     credentials. Read the role's ARN:
+
+     ```bash
+     aws cloudformation describe-stacks --region <region> --stack-name <core stack> \
+       --query "Stacks[0].Outputs[?OutputKey=='EvidenceWriterRoleArn'].OutputValue | [0]" --output text
+     ```
+
+     then name it, the producer identity's own profile and its IAM user
+     name in the writer profile:
+
+     ```bash
+     aws configure set profile.<writer profile>.role_arn <EvidenceWriterRoleArn>
+     ```
+
+     ```bash
+     aws configure set profile.<writer profile>.source_profile <producer's own profile>
+     ```
+
+     ```bash
+     aws configure set profile.<writer profile>.role_session_name <producer's IAM user name>
+     ```
+
+     The session name is part of the assumed-role ARN
+     (`arn:aws:sts::<account id>:assumed-role/<role>/<session name>`) that
+     CloudTrail records for every upload, and the `AssumeRole` event records
+     the identity that started the session. This prints that ARN:
+
+     ```bash
+     aws sts get-caller-identity --profile <writer profile> --query Arn --output text
+     ```
+
+  4. The producer names the writer profile in its configuration (the
+     producer contract, `docs/evidence-repo-spec.md` → "Evidence store").
+
+  The writer policy (`EvidenceWriterPolicyArn`; outside this template,
+  `iam/trust-portal-evidence-writer-policy.json` with `EVIDENCE_BUCKET`
+  replaced) is the role's permission policy: the bucket policy refuses a
+  store put from any identity that holds it directly, so producers hold
+  the assume policy and upload as the role.
+
+- **Prove the bucket once per environment**, after the stack update that
+  creates it, with an operator's own credentials whose IAM policy allows S3
+  on the bucket (an account administrator), so that every refusal comes from
+  the bucket itself. The unit tests' S3 mock evaluates neither bucket policies
+  nor Object Lock.
+
+  ```bash
+  bash deploy/aws/evidence-bucket-check.sh --region <region> --stack <core stack>
+  ```
+
+  It needs the AWS CLI, `openssl` and `python3`. It prints one `PASS` or
+  `FAIL` line per check and exits 0 only when every check passes: the
+  operator's own put under a store prefix is refused (its key,
+  `decision-logs/bucket-check/<UTC timestamp>/operator.txt`, is one the
+  portal records as `unmapped`, and the `FAIL` line of a bucket that stores
+  it names it); a put without `If-None-Match` is refused; a put with
+  `If-None-Match` and `--checksum-sha256` is stored with that checksum under the governance
+  default retention, retained for `EvidenceRetentionYears` from its creation;
+  a second put to the same key answers 412; SSE-C, SSE-KMS and
+  non-`STANDARD` puts are refused; a put carrying Object Lock retention or
+  legal-hold headers is refused; a multipart upload completed without
+  `If-None-Match` is refused (the script then aborts it); a copy into the
+  bucket without `If-None-Match` is refused; deletes (with and without
+  `--bypass-governance-retention`), retention and legal-hold changes are
+  refused; the key holds one version and no delete marker; versioning, the
+  Object Lock default (GOVERNANCE for exactly `EvidenceRetentionYears`
+  years), default encryption and the public access block are as configured;
+  the bucket policy holds each of its denials exactly (the writer role's
+  exemption naming the stack's `EvidenceWriterRoleArn`) and allows nothing;
+  the one lifecycle rule aborts incomplete uploads and expires or transitions
+  nothing. It leaves two small objects under `bucket-check/<UTC timestamp>/`,
+  outside the store prefixes, which the portal never imports and Object Lock
+  keeps for `EvidenceRetentionYears`.
+
+  Prove a writer profile the same way, on a workstation where it is set up,
+  with the operator's credentials as the default and the writer profile
+  named:
+
+  ```bash
+  bash deploy/aws/evidence-bucket-check.sh --region <region> --stack <core stack> --writer-profile <writer profile>
+  ```
+
+  After the checks above, it checks that the profile acts as the
+  `EvidenceWriterRoleArn` role, and that the role is refused reading,
+  listing and listing versions, deleting the check's object or its version,
+  a put outside the store prefixes, and retention, legal-hold, ACL and
+  tagging changes. It writes nothing under the store prefixes, so it proves
+  the refusals; the portal's import of the producer's first upload proves
+  the put.
+- **Governance mode and the bucket policy.** Governance-mode retention gives
+  way only to a principal holding `s3:BypassGovernanceRetention`; the bucket
+  policy denies that action, every object delete and every retention or
+  legal-hold change to every principal (account administrators included) but
+  `EvidenceErasurePrincipalArn` on the one object `EvidenceErasureObjectKey`
+  names, object creation under the store
+  prefixes to every principal but the writer role, and replication writes
+  (`s3:ReplicateObject`, `s3:ReplicateDelete`), which would add replicas or
+  delete markers outside those rules, to every principal. The portal records every version's key,
+  version id and SHA-256 in its audited tables, so a version removed or
+  altered at any time fails `python -m cli audit-verify --evidence-store`.
+
+### Account-level controls
+
+The bucket policy binds every principal, account administrators included. An
+account administrator who can change the bucket policy, the Object Lock
+default retention or the lifecycle configuration can remove those protections
+for objects written afterwards and for versions the portal has not recorded
+yet. Three controls complement the bucket policy:
+
+1. **A service control policy** denies those changes, and governance bypass,
+   on the evidence bucket to every principal but a named break-glass role.
+   Service control policies bind the member accounts of an AWS Organizations
+   organization, so the core stack runs in a member account. Save the policy
+   as `evidence-store-scp.json` with the bucket name, account id and role name
+   filled in:
+
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Sid": "ProtectEvidenceStore",
+         "Effect": "Deny",
+         "Action": [
+           "s3:PutBucketPolicy",
+           "s3:DeleteBucketPolicy",
+           "s3:PutBucketObjectLockConfiguration",
+           "s3:PutLifecycleConfiguration",
+           "s3:BypassGovernanceRetention"
+         ],
+         "Resource": ["arn:aws:s3:::<evidence bucket>", "arn:aws:s3:::<evidence bucket>/*"],
+         "Condition": {"ArnNotLike": {"aws:PrincipalArn": "arn:aws:iam::<account id>:role/<break-glass role>"}}
+       }
+     ]
+   }
+   ```
+
+   Create it and attach it to the account, from the organization's
+   management account:
+
+   ```bash
+   aws organizations create-policy --type SERVICE_CONTROL_POLICY \
+     --name <OrgPrefix>-<AppName>-evidence-store-<env> \
+     --description "Evidence store configuration and governance bypass: break-glass role only" \
+     --content file://evidence-store-scp.json --query Policy.PolicySummary.Id --output text
+   ```
+
+   ```bash
+   aws organizations attach-policy --policy-id <policy id> --target-id <account id>
+   ```
+
+   The break-glass role is then the only identity that changes the bucket's
+   policy, Object Lock or lifecycle configuration or bypasses its retention:
+   a core stack update that changes any of them (setting and clearing
+   `EvidenceErasurePrincipalArn` included) is deployed as the break-glass
+   role, and the break-glass role is the erasure principal of a documented
+   erasure.
+2. **CloudTrail data events** attribute every write to the bucket's objects
+   to the principal that made it. Bucket configuration changes are
+   management events, which every trail records; object writes are data
+   events, which a trail records when an event selector names them. Add a
+   write-only data-event selector for the evidence bucket to an existing
+   trail. `put-event-selectors` sets the trail's complete selector list, so
+   the list carries the trail's current selectors too (read them with
+   `aws cloudtrail get-event-selectors --region <region> --trail-name <trail name>`);
+   this one keeps management events and adds the evidence bucket's object
+   writes:
+
+   ```bash
+   aws cloudtrail put-event-selectors --region <region> --trail-name <trail name> \
+     --advanced-event-selectors '[{"Name":"Management events","FieldSelectors":[{"Field":"eventCategory","Equals":["Management"]}]},{"Name":"Evidence store writes","FieldSelectors":[{"Field":"eventCategory","Equals":["Data"]},{"Field":"resources.type","Equals":["AWS::S3::Object"]},{"Field":"readOnly","Equals":["false"]},{"Field":"resources.ARN","StartsWith":["arn:aws:s3:::<evidence bucket>/"]}]}]'
+   ```
+
+3. **The portal's verification**, `python -m cli audit-verify
+   --evidence-store`, detects what such a change leaves behind: a recorded
+   version removed, a lowered default retention, an object version with a
+   shorter retention than the default, a bucket policy missing one of its
+   denials, and a lifecycle rule that expires or transitions objects. While
+   `EvidenceErasurePrincipalArn` is set, the bucket policy exempts that
+   principal from its delete and lock denials on the one object
+   `EvidenceErasureObjectKey` names (statement `ConfineErasureToOneKey`
+   denies it every other object), and verification reports `unverified`.
+
+### Documented erasure
+
+A data-subject erasure request or a leaked-secret purge removes one object
+version. Run each step as its own command; both stack updates are recorded by
+CloudFormation and CloudTrail, and the portal's record of the erasure is
+audited. From step 1 until step 6 clears the parameters,
+`python -m cli audit-verify --evidence-store` reports `unverified`, so a SOC 2
+evidence run follows step 6.
+
+1. Name the erasure principal (the break-glass role, where the service
+   control policy above protects the bucket) and the object to erase: deploy
+   the core stack with a parameter file holding only
+   `EvidenceErasurePrincipalArn` (the role's or user's ARN as IAM shows it,
+   path included) and `EvidenceErasureObjectKey` (the object's key, exactly;
+   the exemption covers every version of that key and no other object):
+
+   ```bash
+   aws cloudformation deploy --region <region> --stack-name <core stack> \
+     --template-file deploy/aws/trust-portal.yaml --capabilities CAPABILITY_NAMED_IAM \
+     --parameter-overrides file://<erasure-principal.json>
+   ```
+
+2. Grant that principal `s3:DeleteObjectVersion` and
+   `s3:BypassGovernanceRetention` on exactly the object to erase (for a user,
+   `put-user-policy --user-name <erasure user>`, and `delete-user-policy` in
+   step 5):
+
+   ```bash
+   aws iam put-role-policy --role-name <erasure role> --policy-name <OrgPrefix>-<AppName>-evidence-erasure-<env> \
+     --policy-document '{"Version":"2012-10-17","Statement":[{"Sid":"EraseEvidenceVersion","Effect":"Allow","Action":["s3:DeleteObjectVersion","s3:BypassGovernanceRetention"],"Resource":"arn:aws:s3:::<evidence bucket>/<key>"}]}'
+   ```
+
+3. As the erasure principal, delete that version:
+
+   ```bash
+   aws s3api delete-object --region <region> --bucket <evidence bucket> --key <key> \
+     --version-id <version id> --bypass-governance-retention
+   ```
+
+4. Record the erasure in the portal (administrator, from a host that reaches
+   the database; the reason is required):
+
+   ```bash
+   python -m cli evidence-store record-erasure --key <key> --version-id <version id> --reason "<reason>"
+   ```
+
+   Verification then lists the version as erased and does not count it as a
+   failure.
+5. Remove the grant:
+
+   ```bash
+   aws iam delete-role-policy --role-name <erasure role> --policy-name <OrgPrefix>-<AppName>-evidence-erasure-<env>
+   ```
+
+6. Clear the parameters: deploy the core stack again with a parameter file
+   holding only `EvidenceErasurePrincipalArn` and `EvidenceErasureObjectKey`,
+   both set to `""`, the same command as step 1.
+
 ## Who can read the container environment
 
 Lightsail stores a deployment's environment variables, including the portal's
@@ -353,7 +682,8 @@ aws cloudtrail lookup-events --region <region> \
   delete or overwrite a published head, archive or manifest before its
   retention ends. Organisations with AWS Organizations add a service control
   policy denying `s3:PutBucketPolicy` and `s3:DeleteBucketPolicy` on the
-  archive bucket to every principal but a named break-glass role.
+  archive bucket to every principal but a named break-glass role; the
+  evidence store's is under *The evidence store* → *Account-level controls*.
 - **Deploy timing.** Lightsail gives a new container 300 s of failing health
   checks (10 checks, 30 s apart) before it fails the deployment. The
   entrypoint needs at most 120 s to reach the database and up to 37 s for each
@@ -434,7 +764,20 @@ from the source); no API name is used as an action; owner credentials stay out
 of the runtime role; every pipeline import has a core export and the deploy
 role reaches only the core stack's resources; Lightsail writes need the
 stack's tag or resources; chain heads are write-once and a shakedown deploy
-publishes none; the verifier policy reads only `chain-heads/`; the health
+publishes none; the verifier policy reads only `chain-heads/`; the evidence
+store bucket, its bucket policy (also evaluated against sample requests,
+with and without an erasure principal, from the writer role and from every
+other principal), the writer policy and its `iam/`
+mirror, the writer role (only the writer policy, trusting exactly the
+stack's account, the one principal the bucket policy lets create objects
+under the store prefixes) and the assume policy (exactly `sts:AssumeRole` on that
+role) and its `iam/` mirror, the runtime role's evidence reads (equal to the
+S3 operations `app/services/evidence_store/` calls) and its denial of every
+write; `evidence-bucket-check.sh` against a fake S3 that answers like the AWS
+CLI (its JMESPath queries included), applies the bucket's rules and holds the
+template's bucket policy, and against fakes that break each rule, and its
+`--writer-profile` checks against a fake writer role and fakes that grant it
+one more request each; the health
 window covers the entrypoint's worst case; every name carries the environment
 and fits its limit; outputs used by the scripts exist; both templates fit the
 inline-deploy limit; cfn-lint (the pinned version) reports nothing for either

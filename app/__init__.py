@@ -72,15 +72,19 @@ def create_app(config_class=None, *, serving=False):
     from app.routes.setup import setup_bp
     from app.routes.git_sources_api import git_sources_api_bp
     from app.routes.admin_git import admin_git_bp
+    from app.routes.admin_store import admin_store_bp
+    from app.routes.evidence_store_api import evidence_store_api_bp
 
     app.register_blueprint(portal_bp)
     app.register_blueprint(setup_bp)
     app.register_blueprint(admin_bp, url_prefix="/admin")
     app.register_blueprint(admin_git_bp, url_prefix="/admin")
+    app.register_blueprint(admin_store_bp, url_prefix="/admin")
     app.register_blueprint(api_bp, url_prefix="/api")
     app.register_blueprint(crud_bp, url_prefix="/api")
     app.register_blueprint(collectors_api_bp, url_prefix="/api")
     app.register_blueprint(git_sources_api_bp, url_prefix="/api")
+    app.register_blueprint(evidence_store_api_bp, url_prefix="/api")
     check_route_limits(app)
 
     Swagger(app, template={

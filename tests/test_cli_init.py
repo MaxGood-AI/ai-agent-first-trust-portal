@@ -1136,7 +1136,7 @@ def test_full_init_run(app, data_dir, monkeypatch):
     write_json(data_dir / "vendors.json", [{"id": "v1", "name": "V1", "system_ids": ["s1"]}])
     write_json(data_dir / "risk-register.json", [{"id": "r1", "name": "Risk 1"}])
 
-    # decision logs are not part of init
+    # decision logs and the evidence index are not part of init (their default source is the evidence store)
     (data_dir / "decision-logs").mkdir()
     (data_dir / "decision-logs" / "2026-01-01T000000Z_s-init.jsonl").write_text("{}\n")
 
@@ -1145,7 +1145,7 @@ def test_full_init_run(app, data_dir, monkeypatch):
 
     result = run(str(data_dir))
     totals = result["totals"]
-    assert totals["created"] == 7  # 1 control + 1 system + 1 test + 1 policy + 1 vendor + 1 evidence + 1 risk
+    assert totals["created"] == 6  # 1 control + 1 system + 1 test + 1 policy + 1 vendor + 1 risk
     assert totals["updated"] == 0
     assert result["decision_logs"]["created"] == 0
 
@@ -1155,7 +1155,7 @@ def test_full_init_run(app, data_dir, monkeypatch):
         assert TestRecord.query.count() == 1
         assert Policy.query.count() == 1
         assert Vendor.query.count() == 1
-        assert Evidence.query.count() == 1
+        assert Evidence.query.count() == 0
         assert RiskRegister.query.count() == 1
         # Verify vendor M2M
         v = Vendor.query.first()
@@ -1167,7 +1167,7 @@ def test_full_init_run(app, data_dir, monkeypatch):
     rerun = run(str(data_dir))["totals"]
     assert rerun["created"] == 0
     assert rerun["updated"] == 0
-    assert rerun["unchanged"] == 7
+    assert rerun["unchanged"] == 6
 
 
 def test_init_run_missing_dir_exits(tmp_path):
@@ -1288,14 +1288,18 @@ def _parse_import_args(argv):
 
 
 def test_import_cmd_parser():
-    args = _parse_import_args(["import", "--data-dir", "/d", "--dry-run", "--no-decision-logs",
+    args = _parse_import_args(["import", "--data-dir", "/d", "--dry-run", "--decision-logs",
                                "--dataset", "controls", "--dataset", "tests", "--json"])
-    assert (args.data_dir, args.dry_run, args.no_decision_logs, args.json) == ("/d", True, True, True)
+    assert (args.data_dir, args.dry_run, args.decision_logs, args.json) == ("/d", True, True, True)
     assert args.datasets == ["controls", "tests"]
     from cli import import_cmd
     assert args.func is import_cmd.run
+    defaults = _parse_import_args(["import", "--data-dir", "/d"])
+    assert (defaults.decision_logs, defaults.datasets) == (False, None)
     with pytest.raises(SystemExit):
         _parse_import_args(["import", "--data-dir", "/d", "--dataset", "bogus"])
+    with pytest.raises(SystemExit):
+        _parse_import_args(["import", "--data-dir", "/d", "--no-decision-logs"])
 
 
 def test_import_cmd_json_output(app, data_dir, monkeypatch, capsys):
@@ -1305,16 +1309,30 @@ def test_import_cmd_json_output(app, data_dir, monkeypatch, capsys):
     (data_dir / "decision-logs").mkdir()
     (data_dir / "decision-logs" / "2026-01-01T000000Z_s-json.jsonl").write_text(
         json.dumps({"type": "user", "message": {"content": "hi"}}) + "\n")
+    (data_dir / "pentest-evidence" / "layer1").mkdir(parents=True)
+    write_json(data_dir / "pentest-evidence" / "layer1" / "scan.json",
+               {"scan_id": "s", "findings": [{"severity": "HIGH", "summary": "x"}]})
     monkeypatch.setattr("app.create_app", lambda: app)
 
+    # By default: the six authored datasets only.
     status = import_cmd.run(_parse_import_args(["import", "--data-dir", str(data_dir), "--json"]))
     captured = capsys.readouterr()
     assert status == 0
     summary = json.loads(captured.out)
+    assert set(summary["datasets"]) == {"controls", "systems", "tests", "policies", "vendors", "risk-register"}
     assert summary["datasets"]["controls"]["created"] == 1
-    assert summary["decision_logs"]["created"] == 1
+    assert summary["decision_logs"]["created"] == 0
     assert summary["dry_run"] is False
     assert "controls: created=1" in captured.err
+
+    # Named: pentest evidence and decision logs too.
+    status = import_cmd.run(_parse_import_args(["import", "--data-dir", str(data_dir), "--json",
+                                                "--dataset", "pentest-findings", "--decision-logs"]))
+    summary = json.loads(capsys.readouterr().out)
+    assert status == 0
+    assert list(summary["datasets"]) == ["pentest-findings"]
+    assert summary["datasets"]["pentest-findings"]["created"] == 1
+    assert summary["decision_logs"]["created"] == 1
 
 
 def test_import_cmd_text_output_and_failures(app, data_dir, monkeypatch, capsys):
@@ -1324,7 +1342,7 @@ def test_import_cmd_text_output_and_failures(app, data_dir, monkeypatch, capsys)
     (data_dir / "tests.json").write_text("{broken")
     monkeypatch.setattr("app.create_app", lambda: app)
 
-    status = import_cmd.main(["--data-dir", str(data_dir), "--dry-run", "--no-decision-logs",
+    status = import_cmd.main(["--data-dir", str(data_dir), "--dry-run",
                               "--dataset", "controls", "--dataset", "tests"])
     out = capsys.readouterr().out
     assert status == 1

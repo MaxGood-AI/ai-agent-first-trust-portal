@@ -73,6 +73,8 @@ class DecisionLogTranscript(db.Model):
     transcript (kept, gzipped, for review; the stored transcript is
     unchanged). ``entry_count`` and ``entries_sha256`` describe the version's
     entries (``app.services.evidence_import_decision_logs.entries_digest``).
+    ``store_object_id`` names the evidence-store object version a store import
+    read (NULL for every other version).
     """
     __tablename__ = "decision_log_transcripts"
 
@@ -87,8 +89,17 @@ class DecisionLogTranscript(db.Model):
     reason = db.Column(db.Text)
     source_path = db.Column(db.String(500))
     source_commit = db.Column(db.String(64), comment="Evidence-repository commit a git sync read it at")
+    # Deferrable, so a store import writes the version before the object's audited row.
+    store_object_id = db.Column(db.String(36), db.ForeignKey(
+        "evidence_store_objects.id", name="fk_decision_log_transcripts_store_object", deferrable=True,
+        initially="IMMEDIATE"), comment="Evidence-store object version this version was imported from")
     submitted_by = db.Column(db.String(36), db.ForeignKey("team_members.id"))
     received_at = db.Column(db.DateTime(timezone=True), nullable=False,
                             default=lambda: datetime.now(timezone.utc))
 
-    __table_args__ = (db.Index("ix_decision_log_transcripts_session", "session_id", "received_at"),)
+    __table_args__ = (
+        db.Index("ix_decision_log_transcripts_session", "session_id", "received_at"),
+        db.Index("ix_decision_log_transcripts_store_object", "store_object_id",
+                 postgresql_where=db.text("store_object_id IS NOT NULL"),
+                 sqlite_where=db.text("store_object_id IS NOT NULL")),
+    )

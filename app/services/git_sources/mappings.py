@@ -23,6 +23,16 @@ Kinds
 ``decision_log``
     A decision-log transcript (``*.jsonl``) or the manifest of a chunked one.
 
+Defaults
+--------
+A source without ``path_mappings`` uses its role's defaults: for
+``governance`` :data:`DEFAULT_GOVERNANCE_MAPPINGS`, for ``evidence``
+``evidence_import.DEFAULT_EVIDENCE_MAPPINGS`` (every kind of the evidence
+repository layout). An evidence source whose repository leaves pentest
+evidence and decision logs to the evidence store has
+``evidence_import.AUTHORED_EVIDENCE_MAPPINGS`` (the six authored datasets) as
+its ``path_mappings``.
+
 New kinds (for example portal configuration kept in the governance repo)
 are added by extending ``CONTENT_KINDS`` or the import dispatch in
 ``app.services.git_sources.sync``.

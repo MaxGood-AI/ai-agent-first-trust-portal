@@ -14,12 +14,18 @@ history), in the order received, must form a history that only grows:
    first ``entry_count`` stored entries, and entry counts never decrease
    along the history. The one permitted non-prefix step is a genuine
    repository conflict: a version superseded with a reason starting
-   ``repository conflict:`` whose successor is a repository import
-   (``source_path`` set, ``submitted_by`` NULL) and - on PostgreSQL - whose
+   ``repository conflict:`` whose successor is an evidence-repository import
+   (``source_path`` set, ``submitted_by`` NULL, no ``store_object_id``: the
+   evidence store never replaces entries) and - on PostgreSQL - whose
    supersession, the successor's creation and the session's ``conflict_at``
    were recorded by the audit log in one transaction. Any other step with
    that reason is reported and treated as an ordinary step;
 3. a superseded version carries its content (``content_gz``) and reason;
+   a current or superseded version imported from the evidence store
+   (``store_object_id`` set) names an ``evidence_store_objects`` record
+   whose status is ``ingested`` (or ``erased``, after a documented erasure):
+   a version linked to a refused, unchanged or missing record is not one the
+   store's import wrote;
 4. on PostgreSQL, each version's history in the audit log is: created
    (INSERT) with the digest and count it still has, then at most one change,
    ``current`` to ``superseded``; nothing else (superseded versions are
@@ -44,6 +50,8 @@ from sqlalchemy import text
 
 MAX_REPORTED = 100
 CONFLICT_PREFIX = "repository conflict:"
+# The statuses of a store object a current or superseded version may be imported from.
+STORE_IMPORTED = ("ingested", "erased")
 
 
 def _history(session, version_ids: list[str]) -> dict[str, list]:
@@ -103,6 +111,10 @@ def _conflict_step(version, successor, history, conflict_times, postgres: bool, 
     if not successor.source_path or successor.submitted_by is not None:
         issue(version, "a repository-conflict step whose successor is not a repository import")
         return False
+    if successor.store_object_id is not None:
+        issue(version, "a repository-conflict step whose successor is a store import (the evidence store never "
+                       "replaces entries)")
+        return False
     if postgres:
         superseded = [e.changed_at for e in history.get(version.id, [])[1:] if e.status == "superseded"]
         created = [e.changed_at for e in history.get(successor.id, [])[:1] if e.action == "INSERT"]
@@ -118,9 +130,10 @@ def _check_session(session, session_id: str, postgres: bool, issue) -> int:
     from app.services.evidence_import_decision_logs import _canonical_entry, _entry_key, _stored_rows
 
     versions = session.execute(text(
-        "SELECT id, status, entry_count, entries_sha256, content_gz, reason, source_path, submitted_by "
-        "FROM decision_log_transcripts "
-        "WHERE session_id = :s AND status IN ('current', 'superseded') ORDER BY received_at, id"),
+        "SELECT t.id, t.status, t.entry_count, t.entries_sha256, t.content_gz, t.reason, t.source_path, "
+        "t.submitted_by, t.store_object_id, o.status AS object_status FROM decision_log_transcripts t "
+        "LEFT JOIN evidence_store_objects o ON o.id = t.store_object_id "
+        "WHERE t.session_id = :s AND t.status IN ('current', 'superseded') ORDER BY t.received_at, t.id"),
         {"s": session_id}).all()
     unrecorded = sum(1 for v in versions if v.entries_sha256 is None)
     current = [v for v in versions if v.status == "current"]
@@ -136,6 +149,9 @@ def _check_session(session, session_id: str, postgres: bool, issue) -> int:
     for version in versions:
         if version.status == "superseded" and (version.content_gz is None or not version.reason):
             issue(version, "the superseded version has no content or reason")
+        if version.store_object_id is not None and version.object_status not in STORE_IMPORTED:
+            issue(version, "the version names a store object that is not recorded as imported "
+                           f"({version.object_status or 'no record'})")
 
     last_conflict = max(genuine, default=-1)
     for index, (earlier, later) in enumerate(zip(versions, versions[1:])):

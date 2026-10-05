@@ -93,6 +93,11 @@ def create_git_source():
               path_mappings:
                 type: array
                 nullable: true
+                description: >-
+                  Replaces the role's default mappings (null: the defaults; an evidence source's
+                  defaults map every kind of the evidence repository layout). An evidence source
+                  whose repository leaves pentest evidence and decision logs to the evidence store
+                  maps only the six authored datasets.
                 items:
                   type: object
                   properties:

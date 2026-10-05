@@ -301,7 +301,7 @@ def test_oversized_chunked_transcript_is_flagged_from_its_manifest(app, fake, sm
 def test_directory_import_reports_an_oversized_transcript(app, tmp_path, small_cap):
     write(tmp_path, LOG_BIG, BIG)
     write(tmp_path, LOG_OK, GENUINE[0])
-    result = import_directory(str(tmp_path))
+    result = import_directory(str(tmp_path), include_decision_logs=True)
     assert result["decision_logs"]["failed"] == 1 and result["decision_logs"]["created"] == 1
     assert any(line.startswith(f"{LOG_BIG}: not imported (TranscriptTooLargeError:") for line in result["errors"])
     assert db.session.get(DecisionLogSession, "sess-big") is None
@@ -547,7 +547,7 @@ def test_imported_url_columns_must_be_http_urls(app, tmp_path):
          "collected_at": "2026-03-27T00:00:00+00:00"},
         {"test_name": "MFA test", "evidence_type": "link", "url": "https://example.com/ok",
          "collected_at": "2026-03-28T00:00:00+00:00"}]))
-    summary = import_directory(str(tmp_path))
+    summary = import_directory(str(tmp_path), datasets=["controls", "tests", "evidence"])
     assert summary["datasets"]["evidence"]["created"] == 1 and summary["datasets"]["evidence"]["skipped"] == 1
     assert any("url must be an http(s) URL" in line for line in summary["errors"])
     assert [e.url for e in Evidence.query.all()] == ["https://example.com/ok"]

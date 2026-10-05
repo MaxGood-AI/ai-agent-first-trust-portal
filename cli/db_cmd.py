@@ -28,6 +28,10 @@
       every sequence; SELECT only on ``audit_log``, ``audit_witness_arming``
       and ``alembic_version`` and on their sequences (the audit trigger runs
       as SECURITY DEFINER, so audited writes still produce audit rows);
+      SELECT/INSERT on ``audit_witness_publications``; SELECT/INSERT/UPDATE
+      (no DELETE) on ``evidence_store_objects``, ``evidence_documents``,
+      ``evidence_store_sync_runs`` and ``evidence_store_retention_floors``,
+      the portal's records of the evidence store, which it never deletes;
     - revoke everything else it could hold there: TEMPORARY and CREATE on the
       database, CREATE on schema ``public``, TRUNCATE, REFERENCES, TRIGGER and
       MAINTAIN on tables, UPDATE on sequences - so the role can create neither
@@ -228,6 +232,11 @@ SELECT_ONLY_TABLES = ("audit_log", "audit_witness_arming", "alembic_version")
 # Tables the application role may read and append to, never change: the record
 # of witness publications.
 APPEND_ONLY_TABLES = ("audit_witness_publications",)
+# Tables the application role may read, insert and update, never delete from:
+# the records of the evidence store (a documented erasure marks a record), its
+# sync runs (the retention each read) and its retention floors.
+NO_DELETE_TABLES = ("evidence_store_objects", "evidence_documents", "evidence_store_sync_runs",
+                    "evidence_store_retention_floors")
 # The serving-role check refuses any way to write these.
 PROTECTED_TABLES = ("audit_log", "audit_witness_arming")
 # Predefined roles that run programs or write files as the database server.
@@ -441,6 +450,10 @@ def app_role_grants(conn, role: str, database: str) -> list[str]:
         elif relname in APPEND_ONLY_TABLES:
             statements += [f"GRANT SELECT, INSERT ON TABLE {target} TO {role}",
                            f"REVOKE UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER{maintain} "
+                           f"ON TABLE {target} FROM {role}"]
+        elif relname in NO_DELETE_TABLES:
+            statements += [f"GRANT SELECT, INSERT, UPDATE ON TABLE {target} TO {role}",
+                           f"REVOKE DELETE, TRUNCATE, REFERENCES, TRIGGER{maintain} "
                            f"ON TABLE {target} FROM {role}"]
         elif relname in SELECT_ONLY_TABLES:
             statements += [f"GRANT SELECT ON TABLE {target} TO {role}",

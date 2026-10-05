@@ -31,7 +31,7 @@ def test_fresh_database_upgrades_to_head_without_starting_the_app(pg_url, monkey
 
     engine = create_engine(pg_url)
     with engine.connect() as conn:
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "020"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "021"
         tables = set(inspect(conn).get_table_names())
         assert {"git_sources", "git_sync_runs", "auth_rate_limit", "audit_log"} <= tables
         columns = {c["name"]: c for c in inspect(conn).get_columns("team_members")}

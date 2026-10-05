@@ -52,6 +52,7 @@ SECRET_CAPABLE_KEYS = (
     "GITHUB_TOKEN",
     "CLOUDWATCH_LOG_GROUP",
     "AUDIT_WITNESS_BUCKET",
+    "EVIDENCE_STORE_BUCKET",
 )
 
 # Owner (migration) credentials are accepted only from the process environment

@@ -88,16 +88,19 @@ def default_body_limit() -> int | None:
 
 # ----- JSON -----
 
-def check_json_limits(text: str) -> None:
-    """Refuse a JSON document nested deeper than MAX_JSON_DEPTH (400) or with
-    more than MAX_JSON_VALUES arrays, objects and elements (413), without parsing it.
+def check_json_limits(text: str, *, max_depth: int = MAX_JSON_DEPTH, max_values: int | None = MAX_JSON_VALUES) -> None:
+    """Refuse a JSON document nested deeper than ``max_depth`` (400) or with
+    more than ``max_values`` arrays, objects and elements (413; None: no
+    count limit), without parsing it. The defaults are MAX_JSON_DEPTH and
+    MAX_JSON_VALUES.
 
     One left-to-right pass, linear in the length of ``text`` whatever it
     contains: string literals are skipped by a regular expression without
     backtracking, and the scan stops at the first limit exceeded. An
     unterminated string ends the scan (the parser then rejects the document).
     """
-    too_many = RequestEntityTooLarge(f"The JSON body has more than {MAX_JSON_VALUES} values.")
+    limit = max_values if max_values is not None else float("inf")
+    too_many = RequestEntityTooLarge(f"The JSON body has more than {max_values} values.")
     values = closers = depth = 0
     position, length = 0, len(text)
     while position < length:
@@ -113,18 +116,18 @@ def check_json_limits(text: str) -> None:
         elif char in "[{":
             values += 1
             depth += 1
-            if depth > MAX_JSON_DEPTH:
-                raise BadRequest(f"The JSON body is nested deeper than {MAX_JSON_DEPTH} levels.")
-            if values > MAX_JSON_VALUES:
+            if depth > max_depth:
+                raise BadRequest(f"The JSON body is nested deeper than {max_depth} levels.")
+            if values > limit:
                 raise too_many
         elif char == ",":
             values += 1
-            if values > MAX_JSON_VALUES:
+            if values > limit:
                 raise too_many
         else:
             closers += 1
             depth -= 1
-            if closers > MAX_JSON_VALUES:
+            if closers > limit:
                 raise too_many
 
 

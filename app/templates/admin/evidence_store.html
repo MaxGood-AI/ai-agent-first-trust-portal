@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}Evidence Store{% endblock %}
+
+{% block content %}
+<h1>Evidence Store</h1>
+<p><a href="{{ url_for('admin.dashboard') }}">&larr; Back to Dashboard</a></p>
+<p>Decision logs, AI code reviews, security-assessment output and reports, and generated evidence artifacts live in a write-once S3 bucket. The portal records every object version (key, version id, SHA-256, Object Lock retention) in audited tables and imports each one once; evidence documents are visible to team members only.</p>
+
+{% include "admin/_flash.html" %}
+
+<table>
+    <tr><th>Bucket</th><td>{% if status.configured %}<code>{{ status.bucket }}</code>{% else %}{{ not_configured }}{% endif %}</td></tr>
+    <tr><th>Recorded versions</th><td>{{ status.objects }}{% for name, count in status.objects_by_status | dictsort %} &middot; {{ name }} {{ count }}{% endfor %}</td></tr>
+    <tr><th>Evidence documents</th><td>{{ status.documents }}</td></tr>
+    <tr><th>Last sync</th><td>{% if status.last_run %}{{ status.last_run.status }} ({{ status.last_run.queued_at[:19] | replace('T', ' ') }} UTC){% else %}none yet{% endif %}</td></tr>
+</table>
+
+{% if status.configured %}
+<form method="POST" action="{{ url_for('admin_store.evidence_store_sync') }}">
+    {{ csrf_field() }}
+    <button type="submit">Sync now</button>
+</form>
+{% endif %}
+
+{% if anomalies %}
+<h2>Anomalies (latest finished sync)</h2>
+<p class="help-text">Keys are write-once: a later version of a key or a delete marker is never imported and fails verification.</p>
+<table class="data-table">
+    <thead><tr><th>Key</th><th>Version</th><th>Issue</th></tr></thead>
+    <tbody>
+        {% for a in anomalies %}
+        <tr><td><code>{{ a.key }}</code></td><td><code>{{ a.version_id or '' }}</code></td><td>{{ a.issue }}</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+
+<h2>Recent syncs</h2>
+{% if runs %}
+<table class="data-table">
+    <thead><tr><th>Queued</th><th>Trigger</th><th>Status</th><th>Listed</th><th>New</th><th>Ingested</th><th>Unchanged</th><th>Duplicate</th><th>Rejected</th><th>Non-conforming</th><th>Too large</th><th>Anomalies</th><th>Errors</th><th>Default retention</th></tr></thead>
+    <tbody>
+        {% for run in runs %}
+        {% set c = run.counts or {} %}
+        <tr>
+            <td>{{ run.queued_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+            <td>{{ run.trigger_type }}</td>
+            <td>{{ run.status }}{% if run.error_message %}<br><span class="help-text">{{ run.error_message }}</span>{% endif %}</td>
+            <td>{{ c.get('listed', 0) }}</td><td>{{ c.get('new', 0) }}</td><td>{{ c.get('ingested', 0) }}</td>
+            <td>{{ c.get('unchanged', 0) }}</td><td>{{ c.get('duplicate', 0) }}</td><td>{{ c.get('rejected', 0) }}</td><td>{{ c.get('non_conforming', 0) }}</td>
+            <td>{{ c.get('too_large', 0) }}</td><td>{{ c.get('anomalies', 0) }}</td><td>{{ c.get('errors', 0) }}</td><td>{% if run.retention_days %}{{ run.retention_mode }} {{ run.retention_days }} days{% endif %}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>No syncs yet.</p>
+{% endif %}
+
+<h2>Evidence documents</h2>
+{% if documents %}
+<table class="data-table">
+    <thead><tr><th>Title</th><th>Kind</th><th>Size</th><th>Recorded</th></tr></thead>
+    <tbody>
+        {% for d in documents %}
+        <tr>
+            <td><a href="{{ url_for('admin_store.evidence_document', document_id=d.id) }}">{{ d.title }}</a></td>
+            <td>{{ d.kind }}</td><td>{{ d.size }}</td><td>{{ d.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>No evidence documents yet.</p>
+{% endif %}
+
+<h2>Recorded versions</h2>
+<form method="GET" action="{{ url_for('admin_store.evidence_store') }}" class="inline-form">
+    <label for="kind">Kind</label>
+    <select id="kind" name="kind">
+        <option value="">all</option>
+        {% for k in kinds %}<option value="{{ k }}" {% if k == current_kind %}selected{% endif %}>{{ k }}</option>{% endfor %}
+    </select>
+    <label for="status">Status</label>
+    <select id="status" name="status">
+        <option value="">all</option>
+        {% for s in statuses %}<option value="{{ s }}" {% if s == current_status %}selected{% endif %}>{{ s }}</option>{% endfor %}
+    </select>
+    <button type="submit">Filter</button>
+</form>
+{% if objects.items %}
+<table class="data-table">
+    <thead><tr><th>Key</th><th>Version</th><th>Kind</th><th>Status</th><th>Size</th><th>SHA-256</th><th>Retain until</th><th>Detail</th></tr></thead>
+    <tbody>
+        {% for o in objects.items %}
+        <tr>
+            <td><code>{{ o.key }}</code></td><td><code>{{ o.version_id[:16] }}</code></td><td>{{ o.kind }}</td>
+            <td>{{ o.status }}</td><td>{{ o.size }}</td><td><code>{{ (o.sha256 or '')[:16] }}</code></td>
+            <td>{{ o.lock_mode or '—' }} {% if o.retain_until %}{{ o.retain_until.strftime('%Y-%m-%d') }}{% endif %}</td>
+            <td>{{ o.detail or '' }}{% if o.erasure_reason %}<br><span class="help-text">erased: {{ o.erasure_reason }}</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+<p>
+    {% if objects.has_prev %}<a href="{{ url_for('admin_store.evidence_store', page=objects.prev_num, kind=current_kind, status=current_status) }}">&larr; Newer</a>{% endif %}
+    {% if objects.has_next %}<a href="{{ url_for('admin_store.evidence_store', page=objects.next_num, kind=current_kind, status=current_status) }}">Older &rarr;</a>{% endif %}
+</p>
+{% else %}
+<p>No recorded versions{% if current_kind or current_status %} match the filter{% endif %}.</p>
+{% endif %}
+{% endblock %}

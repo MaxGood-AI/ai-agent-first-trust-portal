@@ -869,6 +869,15 @@ def verify_decision_log_history():
         schema:
           type: string
         description: The evidence git source (name or id) when there is more than one
+      - name: against_store
+        in: query
+        schema:
+          type: boolean
+        description: >
+          Also check every version imported from the evidence store against its object: the
+          object verifies in the store, and its body (that version, re-read) hashes to the
+          recorded SHA-256 and the version's content SHA-256 and parses to the version's entry
+          count and entries digest (mismatches, missing and unreadable make it broken)
       - name: after_session
         in: query
         schema:
@@ -884,10 +893,13 @@ def verify_decision_log_history():
       200:
         description: >
           {"status": valid | unverified | broken, "decision_logs": {...version-history result...,
-          "against_repo": {...}}, "next_after_session"}; python -m cli audit-verify --decision-logs
-          --against-repo has no limits
+          "against_repo": {...}, "against_store": {...}}, "next_after_session"}; python -m cli
+          audit-verify --decision-logs --against-repo --against-store has no limits. Without any
+          evidence git source, against_repo still runs (store versions are never counted there)
       400:
-        description: Invalid parameters, or no single evidence git source
+        description: >
+          Invalid parameters, several evidence git sources without source, or against_store while the
+          evidence store is not configured
     """
     from app.services import decision_log_repo_verify as repo_verify
     from app.services.decision_log_verify import verify_decision_logs
@@ -900,11 +912,24 @@ def verify_decision_log_history():
     after = request.args.get("after_session") or None
     checked = verify_decision_logs(db.session, after_session=after, max_sessions=max_sessions)
     status = "broken" if checked["mismatch_count"] else "valid"
+    if request.args.get("against_store", "").lower() in ("1", "true", "yes"):
+        from app.services.evidence_store import NOT_CONFIGURED, store, store_bucket
+        from app.services.evidence_store.verify import verify_decision_logs_against_store
+
+        if store_bucket() is None:
+            return jsonify({"error": NOT_CONFIGURED}), 400
+        against_store = verify_decision_logs_against_store(db.session, store.s3_client(), after_session=after,
+                                                           max_sessions=max_sessions)
+        checked["against_store"] = against_store
+        if against_store["status"] == "broken":
+            status = "broken"
     if request.args.get("against_repo", "").lower() in ("1", "true", "yes"):
         try:
             evidence = repo_verify.evidence_source(request.args.get("source"))
             provider = build_provider_for(evidence)
-        except Exception as exc:  # noqa: BLE001 - no source, several sources, credentials
+        except repo_verify.NoEvidenceSourceError:
+            evidence, provider = None, None
+        except Exception as exc:  # noqa: BLE001 - several sources, unknown name, credentials
             return jsonify({"error": str(exc)[:300]}), 400
         repo = repo_verify.verify_against_repo(db.session, provider, source=evidence, after_session=after,
                                                max_sessions=max_sessions)

@@ -70,7 +70,9 @@ WRITER_ORDER = (
     "pentest_findings", "team_members", "portal_settings", "collector_config", "collector_run",
     "collector_check_result", "decision_log_sessions", "decision_log_entries",
     "decision_log_transcripts", "git_sources", "git_source_files", "git_file_versions",
-    "git_commits", "git_sync_runs", "policy_controls", "vendor_systems", "audit_log",
+    "git_commits", "git_sync_runs", "evidence_store_objects", "evidence_documents",
+    "evidence_document_links", "evidence_store_sync_runs", "evidence_store_retention_floors", "policy_controls",
+    "vendor_systems", "audit_log",
 )
 EVERY_TABLE = "*"
 
@@ -86,6 +88,7 @@ REVISION_LOCKS = {
              "decision_log_sessions", "decision_log_entries"), True),
     "019": (("team_members",), False),
     "020": ((), False),
+    "021": (("controls", "test_records", "pentest_findings", "team_members", "decision_log_transcripts"), False),
 }
 
 

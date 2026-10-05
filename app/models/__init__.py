@@ -23,6 +23,8 @@ from app.models.collector_check_result import CollectorCheckResult
 from app.models.auth_rate_limit import AuthRateLimitWindow
 from app.models.git_source import GitSource, GitSourceFile, GitFileVersion, GitCommit, GitSyncRun
 from app.models.audit_witness import AuditWitnessArming, AuditWitnessPublication
+from app.models.evidence_store import (EvidenceDocument, EvidenceDocumentLink, EvidenceStoreObject,
+                                       EvidenceStoreRetentionFloor, EvidenceStoreSyncRun)
 
 __all__ = [
     "db", "Control", "System", "Vendor", "vendor_systems", "Policy", "policy_controls",
@@ -33,4 +35,6 @@ __all__ = [
     "AuthRateLimitWindow",
     "GitSource", "GitSourceFile", "GitFileVersion", "GitCommit", "GitSyncRun",
     "AuditWitnessArming", "AuditWitnessPublication",
+    "EvidenceStoreObject", "EvidenceStoreSyncRun", "EvidenceStoreRetentionFloor", "EvidenceDocument",
+    "EvidenceDocumentLink",
 ]

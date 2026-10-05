@@ -12,8 +12,9 @@ Commands:
   audit-verify-archive  Verify an archive dump's audit chain against the witness and its manifest
   audit-witness-arm  Arm the audit witness (owner role; heads are published only once armed)
   audit-publish-head  Publish the audit chain head to the witness bucket
-  run-jobs       Execute queued collector runs and git-source syncs now
+  run-jobs       Execute queued collector runs, git-source syncs and evidence-store syncs now
   git-source     Manage git sources (list, add, set-commit, sync)
+  evidence-store Sync and inspect the evidence store; record a documented erasure
   scaffold       Create governance and evidence repository skeletons for a new organisation
   db-wait        Wait for the database (container entrypoint)
   db-migrate     Migrate to head and provision the app role (container entrypoint)
@@ -42,9 +43,10 @@ def build_parser():
     export_parser.add_argument("--git-push", action="store_true", help="Push after commit (implies --git-commit)")
     export_parser.add_argument("--include-audit-log", action="store_true", help="Include audit_log.json in the export")
 
-    from cli import admin_cmd, db_cmd, git_source_cmd, scaffold_cmd
+    from cli import admin_cmd, db_cmd, evidence_store_cmd, git_source_cmd, scaffold_cmd
     admin_cmd.add_parsers(subparsers)
     git_source_cmd.add_parser(subparsers)
+    evidence_store_cmd.add_parser(subparsers)
     scaffold_cmd.add_parser(subparsers)
     db_cmd.add_parsers(subparsers)
     return parser
@@ -78,6 +80,9 @@ def main(argv=None):
     if args.command == "git-source":
         from cli import git_source_cmd
         return git_source_cmd.run(args)
+    if args.command == "evidence-store":
+        from cli import evidence_store_cmd
+        return evidence_store_cmd.run(args)
     if args.command == "scaffold":
         from cli import scaffold_cmd
         return scaffold_cmd.run(args)

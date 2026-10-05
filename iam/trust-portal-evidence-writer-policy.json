@@ -1,0 +1,19 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "WriteEvidence",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::EVIDENCE_BUCKET/decision-logs/*",
+        "arn:aws:s3:::EVIDENCE_BUCKET/codex-reviews/*",
+        "arn:aws:s3:::EVIDENCE_BUCKET/pentest-evidence/*",
+        "arn:aws:s3:::EVIDENCE_BUCKET/pentest-reports/*",
+        "arn:aws:s3:::EVIDENCE_BUCKET/evidence/artifacts/*"
+      ]
+    }
+  ]
+}

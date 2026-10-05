@@ -19,7 +19,8 @@ from app.models import (
 )
 from app.services import chunked_files, evidence_import, team_service
 from app.services.evidence_import import (
-    DATASET_ORDER, DEFAULT_EVIDENCE_MAPPINGS, ImportCounts, classify_path, import_dataset_file,
+    AUTHORED_EVIDENCE_MAPPINGS, DATASET_ORDER, DEFAULT_DATASETS, DEFAULT_EVIDENCE_MAPPINGS, ImportCounts,
+    classify_path, import_dataset_file,
     import_decision_log, import_directory, is_deadlock, remove_dataset_file,
 )
 from app.services.transcript_ingest import parse_transcript
@@ -138,7 +139,7 @@ RECORD_COUNT = 2 + 2 + 2 + 1 + 2 + 2 + 1 + 5  # controls..risks + 5 findings
 # --------------------------------------------------------------------------
 
 def test_second_import_of_identical_data_writes_nothing(app, repo):
-    first = import_directory(str(repo), include_decision_logs=False)
+    first = import_directory(str(repo), datasets=DATASET_ORDER)
     assert first["totals"]["created"] == RECORD_COUNT
     assert first["errors"] == []
     assert first["failed_files"] == 0
@@ -147,7 +148,7 @@ def test_second_import_of_identical_data_writes_nothing(app, repo):
     assert len(db.session.get(Vendor, "v1").systems) == 2
 
     with count_writes() as (writes, _):
-        second = import_directory(str(repo), include_decision_logs=False)
+        second = import_directory(str(repo), datasets=DATASET_ORDER)
 
     assert second["totals"] == {"created": 0, "updated": 0, "unchanged": RECORD_COUNT,
                                 "deleted": 0, "skipped": 1, "retired": 0}  # the pentest summary file
@@ -158,7 +159,7 @@ def test_second_import_of_identical_data_writes_nothing(app, repo):
 
 
 def test_single_changed_field_updates_exactly_one_row(app, repo):
-    import_directory(str(repo), include_decision_logs=False)
+    import_directory(str(repo), datasets=DATASET_ORDER)
     changed = [dict(CONTROLS[0], frequency="quarterly"), CONTROLS[1]]
 
     with count_writes() as (writes, statements):
@@ -437,7 +438,7 @@ def test_link_change_alone_counts_as_update(app):
 
 def test_dry_run_writes_nothing(app, repo):
     with count_writes() as (writes, _):
-        result = import_directory(str(repo), dry_run=True, include_decision_logs=False)
+        result = import_directory(str(repo), dry_run=True, datasets=DATASET_ORDER)
     assert sum(writes.values()) == 0
     assert Control.query.count() == 0
     # ids the run would create satisfy later reference checks...
@@ -446,7 +447,7 @@ def test_dry_run_writes_nothing(app, repo):
     # ...but evidence resolves tests by name against stored rows only
     assert result["datasets"]["evidence"]["skipped"] == 2
 
-    import_directory(str(repo), include_decision_logs=False)
+    import_directory(str(repo), datasets=DATASET_ORDER)
     changed = [dict(CONTROLS[0], name="Changed"), CONTROLS[1]]
     with count_writes() as (writes, _):
         counts = import_dataset_file("controls", "controls.json", changed, dry_run=True)
@@ -515,7 +516,7 @@ def test_old_id_rows_of_the_same_file_are_replaced(app):
 def test_bulk_directory_import_rebuilds_old_ids(app, repo):
     db.session.add(PentestFinding(id="old-1", layer=1, source_file="layer1/scan-1-RepoA.json"))
     db.session.commit()
-    result = import_directory(str(repo), include_decision_logs=False, datasets=["pentest-findings"])
+    result = import_directory(str(repo), datasets=["pentest-findings"])
     assert result["datasets"]["pentest-findings"]["deleted"] == 1
     assert list(result["datasets"]) == ["pentest-findings"]
     assert PentestFinding.query.count() == 5
@@ -624,7 +625,7 @@ def test_import_directory_on_empty_directory(app, tmp_path):
 def test_a_bad_file_is_rolled_back_alone(app, repo):
     (repo / "systems.json").write_text("{broken")
     (repo / "pentest-evidence" / "layer1" / "zz-broken.json").write_text("[")
-    result = import_directory(str(repo), include_decision_logs=False)
+    result = import_directory(str(repo), datasets=DATASET_ORDER)
     assert result["failed_files"] == 2
     assert result["datasets"]["systems"]["skipped"] == 1
     assert any("systems.json: not imported (ValueError" in e for e in result["errors"])
@@ -645,7 +646,7 @@ def test_a_database_error_rolls_back_only_that_file(app, repo, monkeypatch):
         return original(loader, path, parsed, ctx)
 
     monkeypatch.setattr(evidence_import, "_import_parsed", failing)
-    result = import_directory(str(repo), include_decision_logs=False)
+    result = import_directory(str(repo), datasets=DATASET_ORDER)
     assert result["failed_files"] == 1
     assert "vendors.json: not imported (RuntimeError: boom)" in result["errors"]
     assert db.session.get(Vendor, "v-partial") is None
@@ -679,25 +680,62 @@ def test_import_counts_add_and_cap():
     assert data["errors_omitted"] == 8
 
 
-@pytest.mark.parametrize("path,kind", [
-    ("controls.json", "dataset:controls"),
-    ("./systems.json", "dataset:systems"),
-    ("/tests.json", "dataset:tests"),
-    ("policy-index.json", "dataset:policies"),
-    ("vendors.json", "dataset:vendors"),
-    ("risk-register.json", "dataset:risk-register"),
-    ("evidence/evidence-index.json", "dataset:evidence"),
-    ("pentest-evidence/layer3/abc-summary.json", "dataset:pentest-findings"),
-    ("pentest-evidence/layer3/deeper/abc.json", None),
-    ("decision-logs/2026-01-01T000000Z_abc.jsonl", "decision_log"),
-    ("decision-logs/2026-01-01T000000Z_abc.jsonl.manifest.json", "decision_log"),
-    ("decision-logs/2026-01-01T000000Z_abc.jsonl.part-0001", None),
-    ("decision-logs/2026-01-01T000000Z_abc.meta.json", None),
-    ("nested/controls.json", None),
-    ("README.md", None),
+@pytest.mark.parametrize("path,authored_kind,default_kind", [
+    ("controls.json", "dataset:controls", "dataset:controls"),
+    ("./systems.json", "dataset:systems", "dataset:systems"),
+    ("/tests.json", "dataset:tests", "dataset:tests"),
+    ("policy-index.json", "dataset:policies", "dataset:policies"),
+    ("vendors.json", "dataset:vendors", "dataset:vendors"),
+    ("risk-register.json", "dataset:risk-register", "dataset:risk-register"),
+    ("evidence/evidence-index.json", None, "dataset:evidence"),
+    ("evidence/artifacts/decisions/2026-q3.md", None, None),
+    ("pentest-evidence/layer3/abc-summary.json", None, "dataset:pentest-findings"),
+    ("pentest-evidence/layer3/deeper/abc.json", None, None),
+    ("decision-logs/2026-01-01T000000Z_abc.jsonl", None, "decision_log"),
+    ("decision-logs/2026-01-01T000000Z_abc.jsonl.manifest.json", None, "decision_log"),
+    ("decision-logs/2026-01-01T000000Z_abc.jsonl.part-0001", None, None),
+    ("decision-logs/2026-01-01T000000Z_abc.meta.json", None, None),
+    ("nested/controls.json", None, None),
+    ("README.md", None, None),
 ])
-def test_classify_path_default_mappings(path, kind):
-    assert classify_path(path) == kind
+def test_classify_path_default_and_authored_mappings(path, authored_kind, default_kind):
+    """The defaults map every kind of the layout; the authored mappings (a source whose
+    repository leaves pentest evidence and decision logs to the evidence store) only the
+    six authored datasets."""
+    assert classify_path(path) == default_kind
+    assert classify_path(path, AUTHORED_EVIDENCE_MAPPINGS) == authored_kind
+
+
+def test_default_mappings_read_every_kind_and_cli_import_the_authored_datasets():
+    assert DEFAULT_EVIDENCE_MAPPINGS == [
+        {"pattern": "controls.json", "kind": "dataset:controls"},
+        {"pattern": "systems.json", "kind": "dataset:systems"},
+        {"pattern": "tests.json", "kind": "dataset:tests"},
+        {"pattern": "policy-index.json", "kind": "dataset:policies"},
+        {"pattern": "vendors.json", "kind": "dataset:vendors"},
+        {"pattern": "risk-register.json", "kind": "dataset:risk-register"},
+        {"pattern": "evidence/evidence-index.json", "kind": "dataset:evidence"},
+        {"pattern": "pentest-evidence/layer*/*.json", "kind": "dataset:pentest-findings"},
+        {"pattern": "decision-logs/*.jsonl", "kind": "decision_log"},
+        {"pattern": "decision-logs/*.jsonl.manifest.json", "kind": "decision_log"},
+    ]
+    assert AUTHORED_EVIDENCE_MAPPINGS == DEFAULT_EVIDENCE_MAPPINGS[:6]
+    assert DEFAULT_DATASETS == ["controls", "systems", "tests", "policies", "vendors", "risk-register"]
+
+
+def test_import_directory_defaults_to_the_authored_datasets(app, repo):
+    write_json(repo / "decision-logs" / "2026-01-01T000000Z_s-default.jsonl",
+               {"type": "user", "message": {"content": "hi"}})
+    result = import_directory(str(repo))
+    assert list(result["datasets"]) == ["controls", "systems", "tests", "policies", "vendors", "risk-register"]
+    assert result["errors"] == [] and result["failed_files"] == 0
+    assert (Evidence.query.count(), PentestFinding.query.count(), DecisionLogSession.query.count()) == (0, 0, 0)
+    assert result["decision_logs"]["created"] == 0
+
+    named = import_directory(str(repo), datasets=["evidence", "pentest-findings"], include_decision_logs=True)
+    assert list(named["datasets"]) == ["evidence", "pentest-findings"]
+    assert (Evidence.query.count(), PentestFinding.query.count(), DecisionLogSession.query.count()) == (2, 5, 1)
+    assert named["decision_logs"]["created"] == 1
 
 
 def test_classify_path_custom_mappings():
@@ -899,7 +937,7 @@ def test_import_directory_decision_logs(app, tmp_path):
     (logs / "notes.txt").write_text("ignored")
     (logs / "subdir").mkdir()
 
-    result = import_directory(str(tmp_path))
+    result = import_directory(str(tmp_path), include_decision_logs=True)
     assert result["decision_logs"] == {"created": 2, "replaced": 0, "unchanged": 0,
                                        "kept_existing": 0, "rejected": 0, "failed": 2}
     assert result["failed_files"] == 2
@@ -918,11 +956,11 @@ def test_import_directory_decision_logs(app, tmp_path):
     assert DecisionLogEntry.query.filter_by(session_id="sess-b").count() == 40
 
     with count_writes() as (writes, _):
-        rerun = import_directory(str(tmp_path))
+        rerun = import_directory(str(tmp_path), include_decision_logs=True)
     assert rerun["decision_logs"]["unchanged"] == 2
     assert sum(writes.values()) == 0
 
-    dry = import_directory(str(tmp_path), dry_run=True)
+    dry = import_directory(str(tmp_path), dry_run=True, include_decision_logs=True)
     assert dry["decision_logs"]["unchanged"] == 2
 
 
@@ -941,7 +979,7 @@ def test_decision_log_database_failure_is_isolated(app, tmp_path, monkeypatch):
         return original(content, **kwargs)
 
     monkeypatch.setattr(dl, "import_decision_log", flaky)
-    result = import_directory(str(tmp_path))
+    result = import_directory(str(tmp_path), include_decision_logs=True)
     assert result["decision_logs"]["created"] == 1
     assert result["decision_logs"]["failed"] == 1
     assert "RuntimeError: database went away" in result["errors"][0]
@@ -960,7 +998,7 @@ def test_manifest_naming_another_file_is_rejected(app, tmp_path):
     logs.mkdir()
     manifest_bytes, _ = chunked_files.split("2026-01-01T000000Z_other.jsonl", transcript(2), part_size=100)
     (logs / "2026-01-01T000000Z_sess-x.jsonl.manifest.json").write_bytes(manifest_bytes)
-    result = import_directory(str(tmp_path))
+    result = import_directory(str(tmp_path), include_decision_logs=True)
     assert result["decision_logs"]["failed"] == 1
     assert "manifest names" in result["errors"][0]
 
@@ -1200,7 +1238,7 @@ def test_import_directory_reports_rejected_transcripts(app, tmp_path):
     logs = tmp_path / "decision-logs"
     logs.mkdir()
     (logs / "2026-03-01T000000Z_sess-r.jsonl").write_bytes(transcript(4, prefix="forged"))
-    result = import_directory(str(tmp_path))
+    result = import_directory(str(tmp_path), include_decision_logs=True)
     assert result["decision_logs"]["rejected"] == 1
     assert result["failed_files"] == 1
     assert any("sess-r.jsonl: rejected (entry 1 differs" in line for line in result["errors"])

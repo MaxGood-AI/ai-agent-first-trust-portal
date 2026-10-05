@@ -28,13 +28,20 @@ The leader:
   created: fires missed during a leader handover, or while no leader ran,
   are coalesced into that one run. A schedule added or changed while a
   leader runs starts from the present;
-- dispatches queued runs (``collector_run`` and ``git_sync_runs`` rows with
-  ``status = 'queued'``) to a small thread pool. "Run now" and "Sync now"
+- dispatches queued runs (``collector_run``, ``git_sync_runs`` and
+  ``evidence_store_sync_runs`` rows with ``status = 'queued'``) to a small
+  thread pool. "Run now" and "Sync now"
   only enqueue a row and return its id; clients poll the run. A partial
   unique index allows at most one queued/running run per target, and
   enqueueing returns the active run instead of creating a second one;
 - runs the registered periodic tasks (see below), which include the reaper
   of interrupted runs and the pruning of old rate-limit rows.
+
+The evidence store has no cron schedule: while ``EVIDENCE_STORE_BUCKET`` is
+set, the periodic task ``evidence_store_sync`` (registered by
+``start_background``) queues a ``scheduled`` sync of the bucket when a
+process gains leadership and then every hour; like every run, it coalesces
+into the bucket's active run.
 
 Each duty runs on its own: one that raises (a bad schedule row, a failing
 task) is logged and retried at its next turn while the process keeps its
@@ -210,7 +217,7 @@ class JobKind:
     queued_order_column: str
     model: Callable                     # returns the SQLAlchemy model class
     execute: Callable[[str], None]      # executes a claimed run by id (inside an app context)
-    target_model: Callable              # returns the target (config) model class
+    target_model: Callable | None       # returns the target (config) model class; None: no cron schedule
     active_index: str                   # partial unique index: one queued/running run per target
 
 
@@ -247,6 +254,18 @@ def _execute_git_sync(run_id: str) -> None:
     execute_sync_run(run_id)
 
 
+def _store_model():
+    from app.models.evidence_store import EvidenceStoreSyncRun
+    return EvidenceStoreSyncRun
+
+
+def _execute_store_sync(run_id: str) -> None:
+    from app.services.evidence_store.sync import execute_sync_run
+    execute_sync_run(run_id)
+
+
+# Lock classes are unique per kind (8150 collectors, 8151 git sources, 8152 the
+# evidence store). An evidence-store run's target is its bucket.
 KINDS = {
     "collector": JobKind("collector", 8150, "collector_run", "collector_config_id", "started_at",
                          _collector_model, _execute_collector, _collector_target_model,
@@ -254,6 +273,9 @@ KINDS = {
     "git_sync": JobKind("git_sync", 8151, "git_sync_runs", "source_id", "queued_at",
                         _git_model, _execute_git_sync, _git_target_model,
                         "uq_git_sync_runs_one_active"),
+    "evidence_store_sync": JobKind("evidence_store_sync", 8152, "evidence_store_sync_runs", "bucket", "queued_at",
+                                   _store_model, _execute_store_sync, None,
+                                   "uq_evidence_store_sync_runs_one_active"),
 }
 
 
@@ -350,6 +372,24 @@ def enqueue_git_sync(source, trigger_type: str, member_id: str | None = None, fu
         )
 
     return _enqueue(KINDS["git_sync"], source.id, build)
+
+
+def enqueue_evidence_store_sync(bucket: str, trigger_type: str, member_id: str | None = None):
+    """Queue a sync of the evidence store ``bucket``. Returns ``(run, created)``
+    like ``enqueue_collector_run`` (and raises ``ActiveRunConflict`` like it)."""
+    from app.models.evidence_store import EvidenceStoreSyncRun
+
+    def build():
+        return EvidenceStoreSyncRun(
+            id=str(uuid.uuid4()),
+            bucket=bucket,
+            trigger_type=trigger_type,
+            triggered_by_team_member_id=member_id,
+            status="queued",
+            queued_at=_now(),
+        )
+
+    return _enqueue(KINDS["evidence_store_sync"], bucket, build)
 
 
 # ----------------------------------------------------------------------------
@@ -953,6 +993,8 @@ def enqueue_scheduled(kind_name: str, target_id: str):
     from app.models import db
 
     kind = KINDS[kind_name]
+    if kind.target_model is None:
+        return None
     target = db.session.get(kind.target_model(), target_id)
     if target is None or not target.enabled:
         return None
@@ -982,6 +1024,8 @@ def enqueue_missed_fire(kind_name: str, target_id: str, cron: str, until: dateti
     from app.models import db
 
     kind = KINDS[kind_name]
+    if kind.target_model is None:
+        return None
     target = db.session.get(kind.target_model(), target_id)
     if target is None or not target.enabled:
         return None
@@ -1289,9 +1333,10 @@ def start_background(app) -> SchedulerService:
     global _service
     with _service_guard:
         if _service is None:
-            from app.services import audit_witness
+            from app.services import audit_witness, evidence_store
 
             audit_witness.register()
+            evidence_store.register()
             _service = SchedulerService(app)
             _service.start()
         return _service

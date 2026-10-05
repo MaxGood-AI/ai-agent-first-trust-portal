@@ -1,9 +1,10 @@
 """Orchestrator for the `init` command — loads compliance data into the database.
 
-Imports the datasets of an evidence-repository checkout (not its decision
-logs) with the diff-only engine in ``app.services.evidence_import``: only
-real differences are written, so rerunning it on unchanged data writes
-nothing. ``python -m cli import`` also imports decision logs.
+Imports the authored datasets of an evidence-repository checkout
+(``evidence_import.DEFAULT_DATASETS``) with the diff-only engine in
+``app.services.evidence_import``: only real differences are written, so
+rerunning it on unchanged data writes nothing. ``python -m cli import`` also
+imports, when named, the evidence index, pentest evidence and decision logs.
 
 Usage:
     python -m cli.init --data-dir /path/to/data
@@ -39,8 +40,7 @@ def run(data_dir, dry_run=False, verbose=False):
 
     app = create_app()
     with app.app_context():
-        result = import_directory(
-            data_dir, dry_run=dry_run, include_decision_logs=False, log=logger.info)
+        result = import_directory(data_dir, dry_run=dry_run, log=logger.info)
 
     totals = result["totals"]
     logger.info("--- Init complete ---")

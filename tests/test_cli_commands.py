@@ -449,12 +449,17 @@ def test_scaffold_creates_both_repositories(tmp_path):
     assert (governance / "agent-config" / "README.md").is_file()
 
     assert json.loads((evidence / ".evidence-repo.json").read_text()) == scaffold_cmd.EVIDENCE_REPO_FORMAT
-    for name in ("controls.json", "systems.json", "tests.json", "vendors.json", "risk-register.json",
-                 "evidence/evidence-index.json"):
+    for name in ("controls.json", "systems.json", "tests.json", "vendors.json", "risk-register.json"):
         assert json.loads((evidence / name).read_text()) == []
-    for keep in ("evidence/artifacts", "pentest-evidence/layer1", "pentest-evidence/layer4", "decision-logs"):
-        assert (evidence / keep / ".gitkeep").is_file()
-    assert "Example Holdings Ltd" in (evidence / "README.md").read_text()
+    assert (evidence / "evidence" / "artifacts" / "decisions" / ".gitkeep").is_file()
+    # The machine-produced kinds go to the evidence store: the repository has no place for them.
+    for absent in ("evidence/evidence-index.json", "pentest-evidence", "decision-logs"):
+        assert not (evidence / absent).exists()
+    created = sorted(str(path.relative_to(evidence)) for path in evidence.rglob("*") if path.is_file())
+    assert created == [".evidence-repo.json", "README.md", "controls.json", "evidence/artifacts/decisions/.gitkeep",
+                       "policy-index.json", "risk-register.json", "systems.json", "tests.json", "vendors.json"]
+    readme = (evidence / "README.md").read_text()
+    assert "Example Holdings Ltd" in readme and "evidence store" in readme
 
     index = json.loads((evidence / "policy-index.json").read_text())
     assert [entry["file_path"] for entry in index] == [f"policies/{name}" for name in TEMPLATES]
@@ -465,8 +470,8 @@ def test_scaffold_creates_both_repositories(tmp_path):
         assert entry["title"] and entry["category"]
         assert (governance / entry["file_path"]).is_file()
     # governance: policies + CLAUDE/AGENTS/README + 2 section READMEs; evidence: format marker,
-    # 5 datasets, policy index, evidence index, 6 .gitkeep markers, README
-    assert written == len(TEMPLATES) + 5 + (1 + 5 + 1 + 1 + 6 + 1)
+    # 5 datasets, policy index, the decisions .gitkeep marker, README
+    assert written == len(TEMPLATES) + 5 + (1 + 5 + 1 + 1 + 1)
 
 
 def test_scaffold_does_not_overwrite_without_force(tmp_path):

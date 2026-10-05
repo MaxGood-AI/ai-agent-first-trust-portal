@@ -42,6 +42,20 @@ repository, so not in it (an API-only session, or one restored from an
 earlier portal that a full re-import did not find) - is listed separately as
 ``not_in_repository`` (informational).
 
+Versions imported from the evidence store (``store_object_id`` set) are not
+repository imports: ``audit-verify --decision-logs --against-store``
+(:mod:`app.services.evidence_store.verify`) checks them against their store
+objects, and this check neither fetches nor counts them. A session the store
+holds and the repository never supplied is counted as ``in_store``, not
+listed as ``not_in_repository``.
+
+Without any evidence git source (``evidence_source`` raises
+:class:`NoEvidenceSourceError`; callers then pass ``provider=None``) the
+check still runs: a version recorded with a commit cannot be fetched and is
+listed as ``no_source`` (unverifiable), the commit-less ones as
+``no_commit``, so a portal whose transcripts all come from the evidence
+store verifies as ``valid``.
+
 A full re-import of the evidence source (``python -m cli git-source sync
 --name <source> --full``, or "Full re-import" in the admin UI) baselines the
 sessions the repository holds identically (a repository-import version with
@@ -63,16 +77,28 @@ from sqlalchemy import text
 
 MAX_REPORTED = 100
 DEFAULT_WORKERS = 2
+NO_SOURCE_ISSUE = "no evidence git source is configured to fetch it from"
+
+
+class NoEvidenceSourceError(LookupError):
+    """The portal has no evidence git source at all (none was named)."""
 
 
 def evidence_source(name: str | None = None):
-    """The evidence git source to check against (``name``, or the only evidence source)."""
+    """The evidence git source to check against (``name``, or the only evidence source).
+
+    Raises :class:`NoEvidenceSourceError` when no name is given and the portal
+    has no evidence source, and ``LookupError`` when the name matches none or
+    several sources exist.
+    """
     from app.models.git_source import GitSource
 
     query = GitSource.query.filter_by(role="evidence")
     if name:
         query = query.filter((GitSource.name == name) | (GitSource.id == name))
     sources = query.all()
+    if not sources and not name:
+        raise NoEvidenceSourceError("no evidence git source is configured")
     if len(sources) != 1:
         raise LookupError("name the evidence git source to check against (--source)" if sources
                           else "no evidence git source is configured")
@@ -98,11 +124,23 @@ def _read(provider, commit: str, path: str) -> bytes:
         return chunked_files.reassemble(manifest, read_part)
 
 
+def content_fingerprint(content: bytes) -> dict:
+    """``{"sha256", "entries", "entries_sha256"}`` of transcript bytes, parsed as an
+    import parses them, or ``{"kind": "unreadable", "error"}`` when they do not parse."""
+    from app.services.evidence_import_decision_logs import entries_digest
+    from app.services.transcript_ingest import parse_transcript
+
+    try:
+        parsed = parse_transcript(content)
+    except Exception as exc:  # noqa: BLE001 - reported per version, never a crash
+        return {"kind": "unreadable", "error": f"not a readable transcript: {type(exc).__name__}"}
+    return {"sha256": hashlib.sha256(content).hexdigest(), "entries": len(parsed.entries),
+            "entries_sha256": entries_digest(parsed.entries)}
+
+
 def _fingerprint(provider, commit: str, path: str) -> dict:
     """``{"sha256", "entries", "entries_sha256"}`` of the repository's transcript, or ``{"error", "kind"}``."""
-    from app.services.evidence_import_decision_logs import entries_digest
     from app.services.git_sources.providers import GitSourceError, NotFoundError
-    from app.services.transcript_ingest import parse_transcript
 
     try:
         content = _read(provider, commit, path)
@@ -113,19 +151,15 @@ def _fingerprint(provider, commit: str, path: str) -> dict:
         return {"kind": kind, "error": str(exc)[:300]}
     except Exception as exc:  # noqa: BLE001 - reported per version, never a crash
         return {"kind": "unreadable", "error": f"{type(exc).__name__}: {str(exc)[:300]}"}
-    try:
-        parsed = parse_transcript(content)
-    except Exception as exc:  # noqa: BLE001
-        return {"kind": "unreadable", "error": f"not a readable transcript: {type(exc).__name__}"}
-    return {"sha256": hashlib.sha256(content).hexdigest(), "entries": len(parsed.entries),
-            "entries_sha256": entries_digest(parsed.entries)}
+    return content_fingerprint(content)
 
 
 def verify_against_repo(session, provider, *, source=None, after_session: str | None = None,
                         max_sessions: int | None = None, workers: int = DEFAULT_WORKERS) -> dict:
     """Check every repository-import version (module docstring). ``source`` (the
     evidence ``GitSource``) supplies the decision-log mapping and when and as what
-    the source was configured."""
+    the source was configured; ``provider`` None means the portal has no evidence
+    source (every version with a commit is ``no_source``)."""
     from app.services import chunked_files
     from app.services.evidence_import_decision_logs import session_id_from_path
     from app.services.git_sources.mappings import classify, effective_mappings
@@ -151,19 +185,24 @@ def verify_against_repo(session, provider, *, source=None, after_session: str | 
         "received_at "
         "FROM decision_log_transcripts WHERE status IN ('current', 'superseded') AND submitted_by IS NULL "
         "AND source_path IS NOT NULL AND (source_commit IS NOT NULL OR status = 'current') "
+        "AND store_object_id IS NULL "
         "AND session_id = ANY(:ids) ORDER BY session_id, received_at, id"),
         {"ids": ids}).all() if ids else []
+    in_store = set(session.execute(text(
+        "SELECT DISTINCT session_id FROM decision_log_transcripts WHERE store_object_id IS NOT NULL "
+        "AND session_id = ANY(:ids)"), {"ids": ids}).scalars()) if ids else set()
     imported = {v.session_id for v in versions}
     not_in_repository = [{"session_id": row.id, "transcript_path": row.transcript_path} for row in window
-                         if row.id not in imported]
+                         if row.id not in imported and row.id not in in_store]
     session.rollback()  # no snapshot is held while the repository answers
 
-    targets = sorted({(v.source_commit, v.source_path) for v in versions if v.source_commit and not belongs(v)})
+    targets = sorted({(v.source_commit, v.source_path) for v in versions
+                      if v.source_commit and provider is not None and not belongs(v)})
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
         fingerprints = dict(zip(targets, pool.map(lambda t: _fingerprint(provider, *t), targets)))
 
     found = {"mismatches": [], "missing": [], "unreadable": [], "missing_commit": [], "no_commit": [],
-             "local_history": []}
+             "local_history": [], "no_source": []}
     for version in versions:
         item = {"session_id": version.session_id, "version_id": version.id, "status": version.status,
                 "path": version.source_path, "commit": version.source_commit}
@@ -180,6 +219,9 @@ def verify_against_repo(session, provider, *, source=None, after_session: str | 
             else:
                 found["no_commit"].append(dict(item, issue="the version records no repository commit"))
             continue
+        if provider is None:
+            found["no_source"].append(dict(item, issue=NO_SOURCE_ISSUE))
+            continue
         fingerprint = fingerprints[(version.source_commit, version.source_path)]
         if "kind" in fingerprint:
             kind = "local_history" if fingerprint["kind"] == "unverifiable" else fingerprint["kind"]
@@ -193,12 +235,13 @@ def verify_against_repo(session, provider, *, source=None, after_session: str | 
             found["mismatches"].append(dict(item, issue="the repository holds a different transcript "
                                                         f"({', '.join(differences)} differ)"))
     broken = found["mismatches"] or found["missing"] or found["unreadable"] or found["missing_commit"]
-    unverifiable = len(found["no_commit"]) + len(found["local_history"])
+    unverifiable = len(found["no_commit"]) + len(found["local_history"]) + len(found["no_source"])
     status = "broken" if broken else ("unverified" if unverifiable else "valid")
     result = {"status": status, "sessions": len(ids), "versions_checked": len(versions),
               "unverifiable_count": unverifiable,
               "blobs_fetched": len(targets),
               "not_in_repository": not_in_repository[:MAX_REPORTED], "not_in_repository_count": len(not_in_repository),
+              "in_store_count": len(in_store - imported), "repository_configured": provider is not None,
               "next_after_session": ids[-1] if max_sessions is not None and len(ids) >= max_sessions else None}
     for name, items in found.items():
         result[name] = items[:MAX_REPORTED]

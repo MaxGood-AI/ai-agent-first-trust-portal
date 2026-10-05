@@ -1,4 +1,4 @@
-# Trust Portal — AWS IAM policy
+# Trust Portal — AWS IAM policies
 
 `trust-portal-collector-policy.json` is the read-only IAM policy the evidence
 collectors need, and nothing more: every action in it is one the collectors or
@@ -57,3 +57,49 @@ verifier. The portal's runtime role never gets it: its only S3 write is
 deployment creates it as a managed policy (`ArchiveOperatorPolicyArn`).
 `deploy/aws/tests/test_iam_actions.py` keeps it equal to the S3 operations the
 witness and archive code calls.
+
+## Evidence writer policy
+
+`trust-portal-evidence-writer-policy.json` is the permission policy of the
+evidence writer role, the role every upload of evidence store objects is
+made as (decision logs, code reviews, pentest evidence and reports, and
+evidence artifacts): `s3:PutObject` on the store's five key prefixes
+(`decision-logs/`, `codex-reviews/`, `pentest-evidence/`, `pentest-reports/`,
+`evidence/artifacts/`) and nothing else, so an uploader cannot read, list,
+delete or change the retention of anything. Replace `EVIDENCE_BUCKET` with
+the bucket name. The bucket policy denies `s3:PutObject` under those
+prefixes to every principal but the writer role (`OnlyTheWriterRoleWritesEvidence`,
+`ArnNotEquals aws:PrincipalArn` the role's ARN), so every producer, a
+non-human one included, assumes the role and uploads as its session. The
+bucket policy also holds the write rules every upload meets
+(`If-None-Match: *`, SSE-S3 only, storage class `STANDARD`); the producer
+contract is `docs/evidence-repo-spec.md` → "Evidence store". The AWS
+deployment creates the same policy as a managed policy (the core stack's
+`EvidenceWriterPolicyArn` output) and attaches it, as its only permission,
+to the evidence writer role (`EvidenceWriterRoleArn`).
+`deploy/aws/tests/test_evidence_store.py` keeps the file and the managed
+policy identical. The portal's runtime role never holds it: it lists and
+reads the store's object versions, their retention and the bucket's
+versioning, Object Lock configuration, bucket policy and lifecycle
+configuration, exactly the S3 operations
+`app/services/evidence_store/` calls (`deploy/aws/tests/test_iam_actions.py`),
+and is explicitly denied every write, delete, retention, ACL and tagging
+action on the bucket.
+
+## Evidence writer assume policy
+
+`trust-portal-evidence-writer-assume-policy.json` is for each producer of
+evidence, a person or a non-human producer identity: `sts:AssumeRole` on the
+evidence writer role and nothing else. Replace `ACCOUNT_ID` and
+`EVIDENCE_WRITER_ROLE` with the role's account and name. A producer's own
+identity holds this policy and uploads through an AWS CLI profile that
+assumes the role from that identity's credentials, so the upload's
+credentials are a one-hour session that can only add objects under the
+store prefixes. The
+writer role trusts only the IAM users and roles its stack names in
+`EvidenceWriterPrincipalArns` (empty: nobody), and each of them also holds
+this policy to assume it. The AWS deployment creates the same policy as a managed policy
+(the core stack's `EvidenceWriterAssumePolicyArn` output), for attaching to
+producer users and groups; `deploy/aws/tests/test_evidence_store.py` keeps
+the two identical. Setup, step by step: `deploy/README.md` → "The evidence
+store".

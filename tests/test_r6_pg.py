@@ -82,7 +82,8 @@ def test_nb_member_append_after_the_repository_import_is_refused(pg_app):
 
     response = _upload(client, member, "window", GENUINE + [DONE])   # the append window
     assert response.status_code == 409, response.get_json()
-    assert "only the repository may extend it" in response.get_json()["error"]
+    assert "the evidence repository or the evidence store holds this session; only they may extend it" \
+        in response.get_json()["error"]
     admin_done = _rec("user", "done. (admin)", "2026-03-16T12:32:00Z", "u-admin")
     assert _upload(client, admin, "window", GENUINE + [admin_done]).status_code == 409
     db.session.expire_all()

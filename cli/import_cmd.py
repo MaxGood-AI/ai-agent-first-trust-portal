@@ -1,15 +1,17 @@
 """`python -m cli import` — diff-only import of an evidence-repository checkout.
 
 Usage:
-    python -m cli import --data-dir DIR [--dry-run] [--no-decision-logs]
+    python -m cli import --data-dir DIR [--dry-run] [--decision-logs]
                          [--dataset NAME ...] [--json]
 
-Imports the datasets of DIR in dependency order, then its decision logs
-(unless --no-decision-logs), writing only real differences, and prints
-created / updated / unchanged / deleted / skipped counts. --dataset (repeatable)
-restricts the datasets imported. --dry-run compares with the database and
-reports the counts without writing. --json prints the summary as JSON on
-stdout; progress lines go to stderr.
+Imports the authored datasets of DIR (controls, systems, tests, policies,
+vendors, risk-register) in dependency order, writing only real differences,
+and prints created / updated / unchanged / deleted / skipped counts.
+--dataset (repeatable) names exactly the datasets imported, among them
+``evidence`` and ``pentest-findings``, whose default source is the evidence
+store; --decision-logs also imports DIR's decision-logs/. --dry-run compares
+with the database and reports the counts without writing. --json prints the
+summary as JSON on stdout; progress lines go to stderr.
 
 Decision logs follow the upload rules: a transcript that does not extend
 the stored one is rejected (kept for review, reported as an error).
@@ -23,7 +25,7 @@ import json
 import os
 import sys
 
-from app.services.evidence_import import DATASET_ORDER
+from app.services.evidence_import import DATASET_ORDER, DEFAULT_DATASETS
 
 
 def _add_arguments(parser):
@@ -31,11 +33,12 @@ def _add_arguments(parser):
                         help="Evidence repository checkout to import")
     parser.add_argument("--dry-run", action="store_true",
                         help="Report what would change without writing")
-    parser.add_argument("--no-decision-logs", action="store_true",
-                        help="Do not import decision-logs/")
+    parser.add_argument("--decision-logs", action="store_true",
+                        help="Also import decision-logs/ (their default source is the evidence store)")
     parser.add_argument("--dataset", action="append", dest="datasets", choices=DATASET_ORDER,
                         metavar="NAME",
-                        help="Import only this dataset (repeatable): " + ", ".join(DATASET_ORDER))
+                        help="Import exactly the datasets named (repeatable; default: "
+                             + ", ".join(DEFAULT_DATASETS) + "): " + ", ".join(DATASET_ORDER))
     parser.add_argument("--json", action="store_true",
                         help="Print the summary as JSON")
     return parser
@@ -46,8 +49,9 @@ def add_parser(subparsers):
     parser = subparsers.add_parser(
         "import",
         help="Import an evidence repository checkout, writing only differences",
-        description=("Import the datasets and decision logs of an evidence repository "
-                     "checkout, writing only real differences."),
+        description=("Import the authored datasets of an evidence repository checkout (and, when "
+                     "named, its evidence index, pentest evidence and decision logs), writing only "
+                     "real differences."),
     )
     _add_arguments(parser)
     parser.set_defaults(func=run)
@@ -94,7 +98,7 @@ def run(args):
         result = import_directory(
             data_dir,
             dry_run=args.dry_run,
-            include_decision_logs=not args.no_decision_logs,
+            include_decision_logs=args.decision_logs,
             datasets=args.datasets,
             log=progress,
         )

@@ -56,6 +56,10 @@ about the size of the blocks in the transcript. Tool calls stored before this
 form (every non-ASCII character escaped) compare equal to the same calls in
 this form (:func:`same_tool_calls`).
 
+A line nested deeper than :data:`MAX_LINE_DEPTH` (64) arrays and objects
+makes the whole transcript invalid (``TranscriptError``): every line is
+parsed within that depth, whatever its content.
+
 Limits: a transcript holds at most :data:`MAX_TRANSCRIPT_ENTRIES` (50,000)
 entries, each of its lines is at most :data:`MAX_ENTRY_BYTES` (8 MiB), an
 entry's tool calls are at most :data:`MAX_TOOL_CALLS_BYTES` (8 MiB) and the
@@ -101,6 +105,7 @@ MAX_TRANSCRIPT_ENTRIES = 50_000
 MAX_ENTRY_BYTES = 8 * 1024 * 1024
 MAX_TOOL_CALLS_BYTES = 8 * 1024 * 1024
 MAX_TRANSCRIPT_TOOL_CALLS_BYTES = 32 * 1024 * 1024
+MAX_LINE_DEPTH = 64
 
 CLAUDE_CODE_AGENT = "claude_code"
 CODEX_AGENT = "codex"
@@ -336,6 +341,20 @@ def _lines(content):
         yield line_number, line.strip()
 
 
+def _check_line_depth(line: str, line_number: int) -> None:
+    """Refuse a line nested deeper than :data:`MAX_LINE_DEPTH` (``TranscriptError``)."""
+    if line.count("[") + line.count("{") <= MAX_LINE_DEPTH:
+        return  # cannot be nested deeper, whatever the strings hold
+    from werkzeug.exceptions import HTTPException
+
+    from app.request_limits import check_json_limits
+
+    try:
+        check_json_limits(line, max_depth=MAX_LINE_DEPTH, max_values=None)
+    except HTTPException:
+        raise TranscriptError(f"line {line_number} is nested deeper than {MAX_LINE_DEPTH} levels") from None
+
+
 def parse_transcript(content) -> ParsedTranscript:
     """Parse JSONL transcript content (bytes or text) in its detected format.
 
@@ -352,6 +371,7 @@ def parse_transcript(content) -> ParsedTranscript:
     for line_number, line in _lines(content):
         if not line:
             continue
+        _check_line_depth(line, line_number)
         try:
             record = json.loads(line)
         except json.JSONDecodeError:

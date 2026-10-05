@@ -4,7 +4,7 @@
 {% block content %}
 <h1>Git Sources</h1>
 <p><a href="{{ url_for('admin.dashboard') }}">&larr; Back to Dashboard</a></p>
-<p>The portal pulls its governance repository (policies, agent instructions, infrastructure documents) and its evidence repository through these sources. Syncs read only the files that changed and write only real differences.</p>
+<p>The portal pulls its governance repository (policies, agent instructions, infrastructure documents) and its evidence repository through these sources. Syncs read only the files that changed and write only real differences. The <a href="{{ url_for('admin_store.evidence_store') }}">Evidence Store</a> imports decision logs, pentest evidence and evidence artifacts alongside these sources; an evidence source whose repository leaves decision logs and pentest evidence to the store maps only the six authored datasets in its path mappings (API or CLI <code>--mappings-file</code>).</p>
 
 {% include "admin/_flash.html" %}
 

@@ -20,8 +20,9 @@
 #      waits until it is available (migrations run at container start);
 #   2. creates a container-service deployment with the container environment
 #      the portal needs (base access key, runtime role, secret id, database,
-#      and the database owner credentials, which the entrypoint uses for
-#      migrations and removes before the server starts);
+#      EVIDENCE_STORE_BUCKET (the evidence store bucket, on every run), and the
+#      database owner credentials, which the entrypoint uses for migrations and
+#      removes before the server starts);
 #   3. waits until Lightsail reports that deployment ACTIVE, then checks
 #      <PublicUrl><HealthCheckPath> answers 200.
 # A deployment that never becomes healthy ends FAILED, the previous deployment
@@ -93,6 +94,7 @@ RUNTIME_ROLE_EXTERNAL_ID=$(output RuntimeRoleExternalId)
 PORTAL_SECRET_ARN=$(output PortalSecretArn)
 DATABASE_NAME=$(output DatabaseName)
 DATABASE_USER=$(output DatabaseUser)
+EVIDENCE_BUCKET=$(output EvidenceBucketName)
 WITNESS_BUCKET=""
 if [ "$WITNESS" -eq 1 ]; then
     WITNESS_BUCKET=$(output ArchiveBucketName)
@@ -104,6 +106,7 @@ if [ -n "$WITNESS_BUCKET" ]; then
 else
     log "Audit chain heads: NOT published by this deployment (--no-witness: AUDIT_WITNESS_DISABLED=true)"
 fi
+log "Evidence store: s3://$EVIDENCE_BUCKET/ (EVIDENCE_STORE_BUCKET, read-only through the runtime role)"
 
 # --- Database endpoint -------------------------------------------------------
 read -r DB_STATE DB_HOST DB_PORT < <(aws lightsail get-relational-database --region "$REGION" \
@@ -157,11 +160,13 @@ jq -n \
     --arg db_name "$DATABASE_NAME" \
     --arg db_user "$DATABASE_USER" \
     --arg witness "$WITNESS_BUCKET" \
+    --arg evidence "$EVIDENCE_BUCKET" \
     '{($name): {
         image: $image,
         ports: {($port): "HTTP"},
         environment: ((if $witness == "" then {AUDIT_WITNESS_DISABLED: "true"} else {AUDIT_WITNESS_BUCKET: $witness} end) + {
             PORTAL_ENV: "production",
+            EVIDENCE_STORE_BUCKET: $evidence,
             AWS_REGION: $region,
             AWS_ACCESS_KEY_ID: $credentials[0].AWS_ACCESS_KEY_ID,
             AWS_SECRET_ACCESS_KEY: $credentials[0].AWS_SECRET_ACCESS_KEY,

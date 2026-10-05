@@ -32,9 +32,10 @@ done
 [ -n "$STACK" ] && [ -n "$KEY" ] && [ -n "$VALUE_FILE" ] && [ -n "$REGION" ] || usage
 [[ "$KEY" =~ ^[A-Z][A-Z0-9_]*$ ]] || { echo "key must be UPPER_SNAKE_CASE" >&2; exit 2; }
 case "$KEY" in
-    DATABASE_OWNER_*|AUDIT_WITNESS_BUCKET)
+    DATABASE_OWNER_*|AUDIT_WITNESS_BUCKET|EVIDENCE_STORE_BUCKET)
         echo "$KEY never goes in the runtime secret: the owner credentials live in the owner" >&2
-        echo "secret, and deploy.sh sets AUDIT_WITNESS_BUCKET per deployment (--no-witness)." >&2
+        echo "secret, and deploy.sh sets AUDIT_WITNESS_BUCKET per deployment (--no-witness)" >&2
+        echo "and EVIDENCE_STORE_BUCKET from the core stack." >&2
         exit 2 ;;
 esac
 [ -s "$VALUE_FILE" ] || { echo "$VALUE_FILE is missing or empty" >&2; exit 2; }

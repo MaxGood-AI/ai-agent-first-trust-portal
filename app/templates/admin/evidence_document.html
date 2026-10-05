@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Evidence Document{% endblock %}
+
+{% block content %}
+<h1>Evidence document: {{ document.title }}</h1>
+<p><a href="{{ url_for('admin_store.evidence_store') }}">&larr; Evidence Store</a></p>
+
+{% include "admin/_flash.html" %}
+
+<table>
+    <tr><th>Kind</th><td>{{ document.kind }}</td></tr>
+    <tr><th>Key</th><td><code>{{ document.key }}</code></td></tr>
+    <tr><th>Version id</th><td><code>{{ document.version_id }}</code></td></tr>
+    <tr><th>Bucket</th><td><code>{{ document.bucket }}</code></td></tr>
+    <tr><th>SHA-256</th><td><code>{{ document.sha256 }}</code></td></tr>
+    <tr><th>Size</th><td>{{ document.size }} bytes</td></tr>
+    <tr><th>Content type (producer)</th><td>{{ document.content_type or '—' }}</td></tr>
+    <tr><th>Object Lock</th><td>{{ document.lock_mode or '—' }}{% if document.retain_until %} until {{ document.retain_until[:10] }}{% endif %}</td></tr>
+    <tr><th>Record status</th><td>{{ document.object_status }}</td></tr>
+    <tr><th>Metadata</th><td>{% for name, value in document.metadata | dictsort %}<code>{{ name }}</code>: {{ value }}<br>{% else %}—{% endfor %}</td></tr>
+    <tr><th>Recorded</th><td>{{ document.recorded_at[:19] | replace('T', ' ') }} UTC</td></tr>
+</table>
+
+<p>
+    <a href="{{ document.content_url }}">Download</a>
+    {% if previewable %} &middot; <a href="{{ url_for('admin_store.evidence_document_view', document_id=document.id) }}">View</a>{% endif %}
+    <span class="help-text">The portal reads the exact version from the store and serves it only when its SHA-256 matches the record.</span>
+</p>
+
+<h2>Linked controls and tests</h2>
+{% if document.links %}
+<table class="data-table">
+    <thead><tr><th>Type</th><th>Name</th><th>Linked</th><th></th></tr></thead>
+    <tbody>
+        {% for link in document.links %}
+        <tr>
+            <td>{{ link.target.type }}</td>
+            <td>{% if link.target.control_id_short %}{{ link.target.control_id_short }} &middot; {% endif %}{{ link.target.name or link.target.id }}</td>
+            <td>{{ link.created_at[:19] | replace('T', ' ') }}</td>
+            <td>
+                <form method="POST" action="{{ url_for('admin_store.evidence_document_unlink', document_id=document.id, link_id=link.id) }}" class="inline-form">
+                    {{ csrf_field() }}
+                    <button type="submit" data-confirm="Remove this link?">Remove</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>Not linked yet.</p>
+{% endif %}
+
+<form method="POST" action="{{ url_for('admin_store.evidence_document_link', document_id=document.id) }}" class="team-form">
+    {{ csrf_field() }}
+    <div class="form-row">
+        <label for="target">Link to</label>
+        <select id="target" name="target" required>
+            <optgroup label="Controls">
+                {% for c in controls %}<option value="control:{{ c.id }}">{{ c.control_id_short or '' }} {{ c.name }}</option>{% endfor %}
+            </optgroup>
+            <optgroup label="Tests">
+                {% for t in tests %}<option value="test:{{ t.id }}">{{ t.name }}</option>{% endfor %}
+            </optgroup>
+        </select>
+    </div>
+    <button type="submit">Add link</button>
+</form>
+{% endblock %}

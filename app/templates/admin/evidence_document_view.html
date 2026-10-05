@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Evidence Document{% endblock %}
+
+{% block content %}
+<h1>{{ document.title }}</h1>
+<p><a href="{{ url_for('admin_store.evidence_document', document_id=document.id) }}">&larr; Document details</a></p>
+<p class="help-text">Version <code>{{ document.version_id }}</code>, SHA-256 <code>{{ document.sha256 }}</code> (verified against the record).</p>
+<pre>{{ text }}</pre>
+{% endblock %}

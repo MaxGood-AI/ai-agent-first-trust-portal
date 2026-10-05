@@ -12,6 +12,13 @@ ISO 8601 strings; a violation answers 400. A write that breaks a database
 constraint answers 409 for an id that already exists and 400 otherwise (an
 unknown reference such as a missing ``control_id``, or a missing required
 value).
+
+Pentest findings get their id from the server: a POST that names an ``id``
+answers 400 (the id is generated; the response carries it). The pentest
+findings of the evidence store's namespace (``source_file`` starting
+``evidence-store:``) are immutable evidence: PUT and DELETE of one, and a
+POST or PUT that would place a finding in that namespace, answer 409
+(migration 021's guard refuses the same writes for every database role).
 """
 
 import base64
@@ -135,6 +142,23 @@ def column_errors(model_class, data):
     return None
 
 
+STORE_FINDING_ERROR = ("the evidence store's pentest findings are immutable evidence (re-derived from its write-once "
+                       "objects); they are never created, changed or deleted through the API")
+SERVER_ID_ERROR = "pentest finding ids are assigned by the server: leave out id (the response carries the new id)"
+# Models whose ids the server always assigns on POST.
+SERVER_ASSIGNED_IDS = (PentestFinding,)
+
+
+def _store_finding(model_class, item=None, data=None) -> bool:
+    """True for a pentest finding of the evidence store's namespace, or a body that would make one."""
+    if model_class is not PentestFinding:
+        return False
+    from app.services.evidence_import import STORE_NAMESPACE
+
+    values = (getattr(item, "source_file", None), data.get("source_file") if isinstance(data, dict) else None)
+    return any(isinstance(value, str) and value.startswith(STORE_NAMESPACE + ":") for value in values)
+
+
 def _commit_or_error():
     """Commit; on a constraint violation roll back and return an error response."""
     try:
@@ -228,6 +252,10 @@ def _register_crud(model_class, plural_name, required_fields=None):
         for field in required_fields:
             if field not in data:
                 return jsonify({"error": f"Missing required field: {field}"}), 400
+        if _store_finding(model_class, data=data):
+            return jsonify({"error": STORE_FINDING_ERROR}), 409
+        if model_class in SERVER_ASSIGNED_IDS and "id" in data:
+            return jsonify({"error": SERVER_ID_ERROR}), 400
 
         if "id" not in data:
             data["id"] = str(uuid.uuid4())
@@ -247,6 +275,12 @@ def _register_crud(model_class, plural_name, required_fields=None):
         if failure:
             return failure
         return jsonify(_serialize(instance)), 201
+
+    if model_class is PentestFinding:
+        view = create
+        while view is not None:  # every layer of the decorated view carries the OpenAPI docstring
+            view.__doc__ = PENTEST_CREATE_DOC
+            view = getattr(view, "__wrapped__", None)
 
     @crud_bp.route(f"/{plural_name}/<item_id>", methods=["PUT"], endpoint=f"update_{plural_name}")
     @require_api_key
@@ -277,6 +311,8 @@ def _register_crud(model_class, plural_name, required_fields=None):
         data = request.get_json()
         if not data or not isinstance(data, dict):
             return jsonify({"error": "Request body required"}), 400
+        if _store_finding(model_class, item, data):
+            return jsonify({"error": STORE_FINDING_ERROR}), 409
         err = (decode_file_data(data) or url_fields_error(model_class.__tablename__, data)
                or column_errors(model_class, data))
         if err:
@@ -318,10 +354,48 @@ def _register_crud(model_class, plural_name, required_fields=None):
         item = db.session.get(model_class, item_id)
         if not item:
             return jsonify({"error": "Not found"}), 404
+        if _store_finding(model_class, item):
+            return jsonify({"error": STORE_FINDING_ERROR}), 409
 
         db.session.delete(item)
         db.session.commit()
         return jsonify({"deleted": item_id})
+
+
+PENTEST_CREATE_DOC = """Create a pentest finding (human and agent members).
+
+The server assigns the finding's id: a body that names an id answers 400.
+A finding of the evidence store's namespace (source_file starting
+evidence-store:) is never created through the API (409).
+---
+tags:
+  - Pentest Findings
+security:
+  - ApiKeyAuth: []
+requestBody:
+  required: true
+  content:
+    application/json:
+      schema:
+        type: object
+        required: [layer]
+        properties:
+          layer:
+            type: integer
+          severity:
+            type: string
+          summary:
+            type: string
+          source_file:
+            type: string
+responses:
+  201:
+    description: Created; the body carries the server-assigned id
+  400:
+    description: A validation error, or a body that names an id
+  409:
+    description: The finding would be in the evidence store's namespace
+"""
 
 
 # Register CRUD for all entity types

@@ -2,7 +2,9 @@
 
 The AWS operations are derived from the source with `ast`: clients created with
 `<x>.client("<service>")` (assigned or chained), their method calls, their
-paginators, and the CodeCommit git-source provider's `self._call("<op>")`.
+paginators, and the CodeCommit git-source provider's `self._call("<op>")`. In
+the evidence store package every call of an S3 client method name (from
+botocore's S3 model) counts, whatever the receiver is called.
 OPERATION_ACTIONS maps each operation to the IAM action that authorizes it,
 taken from the Service Authorization Reference; where the API name and the
 action name differ (for example S3 GetBucketEncryption, authorized by
@@ -27,6 +29,12 @@ PROVIDER_SOURCE = REPO / "app" / "services" / "git_sources" / "providers.py"
 # Witness and archive code; its S3 clients are passed in as `client`.
 WITNESS_SOURCES = [REPO / "app" / "services" / "audit_witness.py", REPO / "app" / "services" / "audit_archive.py"]
 OPERATOR_POLICY = json.loads((REPO / "iam" / "trust-portal-archive-operator-policy.json").read_text())
+# Evidence store code: every module of the package reads the bucket through the runtime role.
+EVIDENCE_STORE_DIR = REPO / "app" / "services" / "evidence_store"
+# The operations the evidence store calls; the runtime role holds exactly their actions on the bucket.
+EVIDENCE_STORE_OPERATIONS = {("s3", "list_object_versions"), ("s3", "head_object"), ("s3", "get_object"),
+                             ("s3", "get_bucket_versioning"), ("s3", "get_object_lock_configuration"),
+                             ("s3", "get_bucket_policy"), ("s3", "get_bucket_lifecycle_configuration")}
 
 OPERATION_ACTIONS = {
     ("sts", "get_caller_identity"): "sts:GetCallerIdentity",
@@ -58,11 +66,19 @@ OPERATION_ACTIONS = {
     ("s3", "upload_part"): "s3:PutObject",
     ("s3", "complete_multipart_upload"): "s3:PutObject",
     ("s3", "abort_multipart_upload"): "s3:AbortMultipartUpload",
+    # Evidence store reads (app/services/evidence_store/). HeadObject returns a version's
+    # Object Lock mode and retain-until date only to a caller holding s3:GetObjectRetention.
+    ("s3", "head_object"): ("s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectRetention"),
+    ("s3", "get_object_lock_configuration"): "s3:GetBucketObjectLockConfiguration",
+    # The portal checks the bucket policy's denials and that no lifecycle rule expires or
+    # transitions an object; GetBucketLifecycleConfiguration is authorized by s3:GetLifecycleConfiguration.
+    ("s3", "get_bucket_policy"): "s3:GetBucketPolicy",
+    ("s3", "get_bucket_lifecycle_configuration"): "s3:GetLifecycleConfiguration",
 }
 
 # API names that are not IAM actions; the real action is in OPERATION_ACTIONS.
 NOT_IAM_ACTIONS = {"s3:GetBucketEncryption", "s3:GetBucketReplication", "s3:ListBuckets",
-                   "s3:GetPublicAccessBlock"}
+                   "s3:GetPublicAccessBlock", "s3:GetBucketLifecycleConfiguration"}
 
 
 def _client_service(node):
@@ -160,16 +176,81 @@ def witness_operations():
     return operations
 
 
-def runtime_s3_allows():
+def runtime_s3_allow_statements():
+    """Return {Sid: statement text} of the runtime role's block-YAML Allow statements naming S3 actions."""
     from test_template import resource_block, statement_block
     runtime = resource_block("RuntimeRole")
-    actions = set()
+    statements = {}
     for sid in re.findall(r"^\s+- Sid: (\w+)$", runtime, re.MULTILINE):
         statement = statement_block(runtime, sid)
-        if "Effect: Allow" in statement:
+        if "Effect: Allow" in statement and "s3:" in statement:
+            statements[sid] = statement
+    return statements
+
+
+def runtime_s3_allows(bucket=None):
+    """The S3 actions the runtime role's Allow statements grant, on one bucket (logical id) or on any."""
+    actions = set()
+    for statement in runtime_s3_allow_statements().values():
+        if bucket is None or "%s.Arn" % bucket in statement:
             actions |= set(re.findall(r"'(s3:[A-Z]\w+)'", statement))
             actions |= set(re.findall(r"Action: (s3:[A-Z]\w+)\s*$", statement, re.MULTILINE))
     return actions
+
+
+# boto3 adds these managed-transfer methods to every S3 client.
+S3_TRANSFER_METHODS = {"upload_file", "upload_fileobj", "download_file", "download_fileobj"}
+
+
+def s3_method_names():
+    """Every S3 client method name: botocore's S3 operations, snake_cased, and the transfer methods."""
+    import botocore.session
+    from botocore import xform_name
+    model = botocore.session.get_session().get_service_model("s3")
+    # CreateSession serves S3 Express directory buckets only; the name is common in other code.
+    return {xform_name(name) for name in model.operation_names} - {"create_session"} | S3_TRANSFER_METHODS
+
+
+def s3_operations_in(sources):
+    """Return {("s3", operation)} for every call of an S3 client method name in the given source texts.
+
+    The receiver's name does not matter, so a client passed in, stored on `self` or
+    wrapped is still seen; `get_paginator("<op>")` counts as that operation.
+    """
+    names = s3_method_names()
+    operations = set()
+    for source in sources:
+        for node in ast.walk(ast.parse(source)):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+                continue
+            operation = node.func.attr
+            if operation == "get_paginator" and node.args and isinstance(node.args[0], ast.Constant):
+                operation = node.args[0].value
+            if operation in names:
+                operations.add(("s3", operation))
+    return operations
+
+
+def uses_an_aws_client(source):
+    """Whether code creates a client (`.client(`, `get_session(`) or calls a method on one (`*client`, `*s3`)."""
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            if node.func.attr in ("client", "get_session"):
+                return True
+            if ast.unparse(node.func.value).lower().endswith(("client", "s3")):
+                return True
+    return False
+
+
+def evidence_store_sources():
+    return sorted(EVIDENCE_STORE_DIR.rglob("*.py")) if EVIDENCE_STORE_DIR.is_dir() else []
+
+
+def evidence_store_operations():
+    """S3 operations by method name, plus the calls on any other service's client the package creates."""
+    paths = evidence_store_sources()
+    other_services = {op for op in called_operations(paths) if op[0] != "s3"}
+    return s3_operations_in([path.read_text() for path in paths]) | other_services
 
 
 class WitnessGrantsMatchCodeTests(unittest.TestCase):
@@ -179,12 +260,65 @@ class WitnessGrantsMatchCodeTests(unittest.TestCase):
     def test_runtime_role_holds_only_the_serving_subset(self):
         serving = to_actions({("s3", "put_object"), ("s3", "get_object"), ("s3", "list_object_versions")})
         self.assertLessEqual(serving, to_actions(witness_operations()))
-        self.assertEqual(runtime_s3_allows(), serving)
+        self.assertEqual(runtime_s3_allows("ArchiveBucket"), serving)
+
+    def test_every_runtime_s3_grant_names_exactly_one_bucket(self):
+        statements = runtime_s3_allow_statements()
+        self.assertTrue(statements)
+        for sid, statement in statements.items():
+            buckets = [b for b in ("ArchiveBucket", "EvidenceBucket") if "%s.Arn" % b in statement]
+            self.assertEqual(len(buckets), 1, sid)
+        self.assertEqual(runtime_s3_allows(), runtime_s3_allows("ArchiveBucket") | runtime_s3_allows("EvidenceBucket"))
 
     def test_scan_sees_the_multipart_upload(self):
         operations = witness_operations()
         for op in ("create_multipart_upload", "upload_part", "complete_multipart_upload", "abort_multipart_upload"):
             self.assertIn(("s3", op), operations)
+
+
+class EvidenceStoreGrantsMatchCodeTests(unittest.TestCase):
+    """The runtime role reads the evidence store with exactly what app/services/evidence_store/ calls."""
+
+    def test_runtime_role_grants_exactly_the_evidence_store_reads(self):
+        self.assertEqual(runtime_s3_allows("EvidenceBucket"), to_actions(EVIDENCE_STORE_OPERATIONS))
+        self.assertEqual(runtime_s3_allows("EvidenceBucket"),
+                         {"s3:ListBucketVersions", "s3:GetBucketVersioning", "s3:GetBucketObjectLockConfiguration",
+                          "s3:GetBucketPolicy", "s3:GetLifecycleConfiguration",
+                          "s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectRetention"})
+
+    def test_evidence_store_code_calls_only_the_granted_operations(self):
+        called = evidence_store_operations()
+        self.assertEqual(called - EVIDENCE_STORE_OPERATIONS, set(),
+                         "a new evidence store call: map it, grant it and add it to EVIDENCE_STORE_OPERATIONS")
+        self.assertLessEqual(to_actions(called), runtime_s3_allows("EvidenceBucket"))
+
+    def test_scan_sees_the_listing_once_the_package_uses_a_client(self):
+        sources = [path.read_text() for path in evidence_store_sources()]
+        if any(uses_an_aws_client(source) for source in sources):
+            self.assertIn(("s3", "list_object_versions"), evidence_store_operations())
+
+    def test_client_use_is_detected(self):
+        self.assertTrue(uses_an_aws_client("s3 = aws_session.get_session().client('s3')"))
+        self.assertTrue(uses_an_aws_client("def f(client):\n    return client.anything(Bucket=b)"))
+        self.assertTrue(uses_an_aws_client("def f(self):\n    return self._s3.anything(Bucket=b)"))
+        self.assertFalse(uses_an_aws_client('"""Calls list_object_versions on a client."""\nPREFIXES = ("a/",)'))
+
+    def test_scan_finds_s3_calls_whatever_the_client_is_called(self):
+        source = "\n".join([
+            "def sync(store, session):",
+            "    page = store._s3.list_object_versions(Bucket=b, Prefix=p)",
+            "    head = self.client.head_object(Bucket=b, Key=k, VersionId=v, ChecksumMode='ENABLED')",
+            "    pages = s3.get_paginator('list_object_versions').paginate(Bucket=b)",
+            "    lock = session.client('s3').get_object_lock_configuration(Bucket=b)",
+            "    record = dict(metadata).copy()",
+            "    values.update(other)",
+            "    s3.download_file(b, k, path)",
+        ])
+        self.assertEqual(s3_operations_in([source]),
+                         {("s3", "list_object_versions"), ("s3", "head_object"),
+                          ("s3", "get_object_lock_configuration"), ("s3", "download_file")})
+        with self.assertRaises(AssertionError):
+            to_actions(s3_operations_in([source]))  # download_file is not mapped: a new call fails the test
 
 
 class ActionNameTests(unittest.TestCase):

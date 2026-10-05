@@ -27,7 +27,7 @@ from app.models import TestRecord as ControlTestRow
 from app.models.git_source import GitCommit, GitFileVersion, GitSource, GitSourceFile, GitSyncRun
 from app.services import chunked_files, governance_docs, scheduler, team_service
 from app.services.collector_encryption import decrypt_credentials
-from app.services.evidence_import import DEFAULT_EVIDENCE_MAPPINGS
+from app.services.evidence_import import AUTHORED_EVIDENCE_MAPPINGS, DEFAULT_EVIDENCE_MAPPINGS
 from app.services.git_sources import mappings, service, sync
 from app.services.git_sources.providers import (
     Change,
@@ -1305,6 +1305,46 @@ def test_removed_dataset_file_keeps_its_records(app, ev_repo, ev_source):
     assert run.counts == counts(skipped=1)
     assert ControlTestRow.query.count() == 1
     assert files_of(ev_source)["tests.json"].status == "deleted"
+
+
+def test_a_full_sync_with_default_mappings_keeps_the_imported_pentest_findings(app, ev_repo, ev_source):
+    """The defaults read pentest evidence and decision logs, so a full re-import of an existing
+    source finds every file it imported: nothing is marked deleted and no finding is removed."""
+    assert ev_source.path_mappings is None
+    assert [m["pattern"] for m in DEFAULT_EVIDENCE_MAPPINGS][6:] == [
+        "evidence/evidence-index.json", "pentest-evidence/layer*/*.json", "decision-logs/*.jsonl",
+        "decision-logs/*.jsonl.manifest.json"]
+    assert run_sync(ev_source).counts == counts(created=8)
+    findings = sorted((f.id, f.source_file) for f in PentestFinding.query.all())
+    assert len(findings) == 2
+
+    run, created = scheduler.enqueue_git_sync(ev_source, "manual", full=True)
+    assert created and scheduler.execute_claimed("git_sync", run.id) == "executed"
+    db.session.expire_all()
+    full = db.session.get(GitSyncRun, run.id)
+    assert full.status == "success", full.details
+    assert full.details["strategy"] == "full"
+    assert (full.counts["created"], full.counts["deleted"]) == (0, 0), full.counts
+    assert sorted((f.id, f.source_file) for f in PentestFinding.query.all()) == findings
+    assert (Evidence.query.count(), DecisionLogSession.query.count()) == (1, 2)
+    assert {path: f.status for path, f in files_of(ev_source).items()} == dict.fromkeys(
+        ["controls.json", "tests.json", "evidence/evidence-index.json", PENTEST_PATH, LOG_1,
+         LOG_2 + ".manifest.json"], "ok")
+
+
+def test_authored_mappings_leave_pentest_evidence_and_decision_logs_to_the_store(app, ev_repo, ev_source):
+    """A source whose repository leaves those kinds to the evidence store maps the authored
+    datasets: its next sync marks the other files deleted, removes the findings of its pentest
+    file and keeps its evidence records and decision-log sessions."""
+    run_sync(ev_source)
+    assert (Evidence.query.count(), PentestFinding.query.count(), DecisionLogSession.query.count()) == (1, 2, 2)
+    service.update_source(db.session.get(GitSource, ev_source.id), {"path_mappings": AUTHORED_EVIDENCE_MAPPINGS})
+    assert db.session.get(GitSource, ev_source.id).last_synced_commit is None
+    run = run_sync(ev_source)
+    assert run.status == "success", run.details
+    assert {path for path, f in files_of(ev_source).items() if f.status == "deleted"} == {
+        "evidence/evidence-index.json", PENTEST_PATH, LOG_1, LOG_2 + ".manifest.json"}
+    assert (Evidence.query.count(), PentestFinding.query.count(), DecisionLogSession.query.count()) == (1, 0, 2)
 
 
 def test_longer_decision_log_export_replaces_the_stored_one(app, ev_repo, ev_source):

@@ -142,9 +142,24 @@ class TemplateShapeTests(unittest.TestCase):
         for text in (TEMPLATE, PIPELINE):
             self.assertLessEqual(len(text.encode()), INLINE_TEMPLATE_LIMIT)
 
+    def test_every_bucket_policy_of_a_retained_bucket_is_retained(self):
+        """Deleting the stack, or replacing the policy, never strips a retained bucket of its denials."""
+        retain = {"    DeletionPolicy: Retain", "    UpdateReplacePolicy: Retain"}
+        checked = []
+        for text, lines in ((TEMPLATE, LINES), (PIPELINE, PIPELINE_LINES)):
+            for logical_id in re.findall(r"^  (\w+):\n    Type: AWS::S3::BucketPolicy$", text, re.MULTILINE):
+                policy = resource_block(logical_id, lines).split("\n")
+                bucket = next(re.fullmatch(r" {6}Bucket: !Ref (\w+)", line) for line in policy
+                              if line.startswith("      Bucket: ")).group(1)
+                if "    DeletionPolicy: Retain" in resource_block(bucket, lines).split("\n"):
+                    self.assertLessEqual(retain, set(policy), logical_id)
+                    checked.append(logical_id)
+        self.assertEqual(sorted(checked), ["ArchiveBucketPolicy", "EvidenceBucketPolicy"])
+
     def test_outputs_read_by_scripts_exist_on_the_core_stack(self):
         keys = output_keys()
-        for script in ("deploy.sh", "bootstrap-admin.sh", "set-secret-key.sh"):
+        for script in ("deploy.sh", "bootstrap-admin.sh", "set-secret-key.sh", "archive-bucket-check.sh",
+                       "evidence-bucket-check.sh"):
             used = outputs_read((AWS_DIR / script).read_text())
             self.assertTrue(used, script)
             self.assertEqual(used - keys, set(), script)
@@ -219,13 +234,14 @@ class OwnerCredentialTests(unittest.TestCase):
         self.assertIn("{{resolve:secretsmanager:${OwnerSecret}:SecretString:DATABASE_OWNER_PASSWORD}}",
                       resource_block("Database"))
 
-    def test_runtime_secret_is_stripped_of_owner_keys_and_the_witness_bucket(self):
+    def test_runtime_secret_is_stripped_of_owner_keys_and_the_bucket_names(self):
         runtime, owner = secret_specs()
         self.assertEqual(runtime["SecretId"], "${PortalSecret}")
         self.assertEqual(runtime["Remove"], ["DATABASE_OWNER_USER", "DATABASE_OWNER_PASSWORD",
-                                             "DATABASE_OWNER_URL", "AUDIT_WITNESS_BUCKET"])
+                                             "DATABASE_OWNER_URL", "AUDIT_WITNESS_BUCKET", "EVIDENCE_STORE_BUCKET"])
         self.assertNotIn("DATABASE_OWNER_PASSWORD", runtime["Generate"])
         self.assertNotIn("AUDIT_WITNESS_BUCKET", runtime["Fixed"])
+        self.assertNotIn("EVIDENCE_STORE_BUCKET", runtime["Fixed"])
         self.assertEqual(owner["SecretId"], "${OwnerSecret}")
         self.assertEqual(owner["Generate"], {"DATABASE_OWNER_PASSWORD": "password"})
         self.assertEqual(runtime["Regenerable"], ["SECRET_KEY", "DATABASE_PASSWORD", "BOOTSTRAP_TOKEN"])
@@ -303,6 +319,15 @@ class WitnessTests(unittest.TestCase):
         self.assertIn("'s3:PutObjectRetention', 's3:PutBucketObjectLockConfiguration'",
                       statement_block(policy, "DenyRetentionChanges"))
 
+    def test_archive_bucket_policy_denies_replication_writes_to_everyone(self):
+        """Replicas and replicated delete markers (s3:ReplicateObject, s3:ReplicateDelete) never land in the bucket."""
+        self.assertEqual(statement_block(resource_block("ArchiveBucketPolicy"), "DenyReplicationWrites").split("\n"), [
+            "          - Sid: DenyReplicationWrites",
+            "            Effect: Deny",
+            "            Principal: '*'",
+            "            Action: ['s3:ReplicateObject', 's3:ReplicateDelete']",
+            "            Resource: !Sub '${ArchiveBucket.Arn}/*'"])
+
     def test_every_deploy_states_its_witness_mode(self):
         self.assertIn('WITNESS=""\n', DEPLOY_SH)
         self.assertIn('--witness) [ -z "$WITNESS" ] || usage; WITNESS=1; shift ;;', DEPLOY_SH)
@@ -330,8 +355,8 @@ class WitnessTests(unittest.TestCase):
         self.assertIn('"$WITNESS_FLAG"', buildspec)
         self.assertNotIn("PublishWitness", PIPELINE)
 
-    def test_operators_cannot_put_the_witness_bucket_in_the_secret(self):
-        self.assertIn("DATABASE_OWNER_*|AUDIT_WITNESS_BUCKET)", (AWS_DIR / "set-secret-key.sh").read_text())
+    def test_operators_cannot_put_a_bucket_name_in_the_secret(self):
+        self.assertIn("DATABASE_OWNER_*|AUDIT_WITNESS_BUCKET|EVIDENCE_STORE_BUCKET)", (AWS_DIR / "set-secret-key.sh").read_text())
 
     def test_verifier_policy_reads_heads_and_archives_only(self):
         policy = json.loads((REPO / "iam" / "trust-portal-witness-verifier-policy.json").read_text())
@@ -461,7 +486,7 @@ class NamingTests(unittest.TestCase):
     def test_bucket_names_carry_account_and_region(self):
         buckets = re.findall(r"BucketName: !Sub (.+)", TEMPLATE)
         buckets += re.findall(r"BucketName: !Sub\n\s+- (\S+)", PIPELINE)
-        self.assertEqual(len(buckets), 2)
+        self.assertEqual(len(buckets), 3)
         for bucket in buckets:
             self.assertTrue(bucket.endswith("-${AWS::AccountId}-${AWS::Region}"), bucket)
             self.assertLessEqual(len(self.render(bucket)), 63, bucket)

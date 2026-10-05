@@ -18,7 +18,17 @@ git working tree is refused. Nothing a command prints (stdout) or logs
     (``--rehash-archive`` streams the archive and recomputes its SHA-256).
     ``--decision-logs`` also checks every session's stored decision-log
     entries against the digest its audited transcript version recorded
-    (``app.services.decision_log_verify``).
+    (``app.services.decision_log_verify``); with ``--against-repo`` every
+    repository-import version against the evidence repository, with
+    ``--against-store`` every store-import version against its evidence-store
+    object (its body re-read, hashed and parsed). ``--evidence-store [--full]``
+    checks every evidence-store record against the store and its import
+    outcome against the database (every outcome that is not a straightforward
+    import re-derived from the version's body on every run; every refusal
+    listed), the store's listing against the records and the bucket's
+    configuration and retention floors (every lowering listed;
+    ``app.services.evidence_store.verify``; exit 2 when
+    ``EVIDENCE_STORE_BUCKET`` is not set).
     Exit status: 0 valid or empty, 3 intact with forks, 4 unverified (intact,
     but the anchor was not checked: no ``--witness-s3``), 1 broken, 2 usage or
     the witness bucket cannot be listed.
@@ -57,7 +67,7 @@ git working tree is refused. Nothing a command prints (stdout) or logs
     Publish the current chain head to ``AUDIT_WITNESS_BUCKET`` now (exit 2
     when the witness is disabled, unconfigured or not armed).
 ``python -m cli run-jobs``
-    Execute every queued collector run and git-source sync now, in this
+    Execute every queued collector run, git-source sync and evidence-store sync now, in this
     process (useful where no gunicorn worker runs the scheduler).
 """
 
@@ -95,6 +105,13 @@ def add_parsers(subparsers) -> None:
     verify.add_argument("--against-repo", action="store_true",
                         help="With --decision-logs: check every repository-import version against the evidence "
                              "repository at its recorded commit")
+    verify.add_argument("--against-store", action="store_true",
+                        help="With --decision-logs: check every evidence-store import version against its store "
+                             "object")
+    verify.add_argument("--evidence-store", action="store_true",
+                        help="Also check every evidence-store record against the store, and the store's listing")
+    verify.add_argument("--full", action="store_true",
+                        help="With --evidence-store: re-read every body and recompute its SHA-256")
     verify.add_argument("--source", help="The evidence git source (name or id) when there is more than one")
     verify.add_argument("--after-session", help="Resume the decision-log checks after this session id")
     verify.add_argument("--max-sessions", type=int, help="Check at most this many sessions")
@@ -125,7 +142,7 @@ def add_parsers(subparsers) -> None:
     arm = subparsers.add_parser("audit-witness-arm", help="Arm the audit witness (owner role; audited)")
     arm.add_argument("--note", default=None, help="Why the witness is armed (at most 500 characters)")
     subparsers.add_parser("audit-publish-head", help="Publish the audit chain head to the witness bucket now")
-    subparsers.add_parser("run-jobs", help="Execute queued collector runs and git syncs now")
+    subparsers.add_parser("run-jobs", help="Execute queued collector runs, git syncs and evidence-store syncs now")
 
 
 def _anchor_as_owner(args, out) -> int:
@@ -300,6 +317,54 @@ def _verify_archive(args, out) -> int:
     return 4 if result["unchecked"] else 0
 
 
+def _first_store_failure(stored: dict) -> str:
+    issues = stored["bucket_check"]["issues"]
+    if issues:
+        return f"bucket: {issues[0]}"
+    for part in (stored.get("records"), stored.get("documents"), stored.get("store_findings"), stored.get("listing")):
+        if part and part["failures"]:
+            finding = part["failures"][0]
+            name = finding.get("key") or finding.get("source_file")
+            return f"{name} ({finding.get('version_id')}): {finding['issue']}"
+    return "failures found"
+
+
+def _write_store_summary(stored: dict, out) -> None:
+    bucket = stored["bucket_check"]
+    records, listing = stored.get("records") or {}, stored.get("listing") or {}
+    documents = stored.get("documents") or {}
+    findings = stored.get("store_findings") or {}
+    out.write(f"evidence_store: status={stored['status']} bucket={stored['bucket']} "
+              f"records={records.get('checked', 0)} rederived={records.get('rederived', 0)} "
+              f"bytes_read={stored.get('bytes_read', 0)} store_findings={findings.get('findings', 0)} "
+              f"documents={documents.get('checked', 0)} "
+              f"listed={listing.get('listed', 0)} failures={stored['failure_count']} "
+              f"unrecorded={stored['unrecorded_count']} pending={records.get('pending_count', 0)} "
+              f"erased={records.get('erased_count', 0)} acknowledged={records.get('acknowledged_count', 0)} "
+              f"retention_expired={records.get('retention_expired_count', 0)} "
+              f"refusals={records.get('refusals_count', 0)} "
+              f"store_conflicts={stored.get('store_conflicts_count') or 0} full={stored['full']}\n")
+    out.write(f"evidence_store bucket: versioning={bucket['versioning']} object_lock={bucket['object_lock']} "
+              f"default_retention={json.dumps(bucket['default_retention'])} "
+              f"retention_floor_days={bucket.get('retention_floor_days')} "
+              f"retention_floor_lowerings={bucket.get('retention_floor_lowerings_count', 0)} "
+              f"lifecycle_rules={bucket.get('lifecycle_rules')}\n")
+    for lowering in (bucket.get("retention_floor_lowerings") or [])[:10]:
+        out.write(f"evidence-store retention floor lowered: {json.dumps(lowering, default=str)}\n")
+    for issue in bucket["issues"]:
+        out.write(f"evidence-store bucket issue: {issue}\n")
+    for principal in bucket.get("erasure_principals") or []:
+        out.write(f"evidence-store unverified: the bucket policy excepts the erasure principal {principal}\n")
+    for part in (records, documents, findings, listing):
+        for finding in (part.get("failures") or [])[:10]:
+            out.write(f"evidence-store failure: {json.dumps(finding, default=str)}\n")
+    for name, part in (("unrecorded", listing), ("pending", records), ("erased", records),
+                       ("acknowledged", records), ("retention_expired", records), ("refusals", records),
+                       ("store_conflicts", stored)):
+        for finding in (part.get(name) or [])[:10]:
+            out.write(f"evidence-store {name}: {json.dumps(finding, default=str)}\n")
+
+
 def run(args, out=sys.stdout) -> int:
     from app.logging_config import route_logs_to_stderr
 
@@ -352,6 +417,17 @@ def run(args, out=sys.stdout) -> int:
             if args.rehash_archive and not args.witness_s3:
                 out.write("error: --rehash-archive needs --witness-s3\n")
                 return 2
+            if (args.against_repo or args.against_store) and not args.decision_logs:
+                out.write("error: --against-repo and --against-store need --decision-logs\n")
+                return 2
+            if args.full and not args.evidence_store:
+                out.write("error: --full needs --evidence-store\n")
+                return 2
+            from app.services.evidence_store import NOT_CONFIGURED, store_bucket
+
+            if (args.evidence_store or args.against_store) and store_bucket() is None:
+                out.write(f"error: {NOT_CONFIGURED}\n")
+                return 2
             try:
                 if args.witness_file:
                     heads = audit_witness.load_heads_file(args.witness_file)
@@ -379,9 +455,6 @@ def run(args, out=sys.stdout) -> int:
             result = verify_chain(db.session, max_rows=args.max_rows, progress=progress, witness_heads=heads,
                                   anchor_verifier=anchor_verifier)
             sys.stderr.write("\n")
-            if args.against_repo and not args.decision_logs:
-                out.write("error: --against-repo needs --decision-logs\n")
-                return 2
             if args.decision_logs:
                 from app.services.decision_log_verify import verify_decision_logs
 
@@ -399,7 +472,9 @@ def run(args, out=sys.stdout) -> int:
                     try:
                         evidence = repo_verify.evidence_source(args.source)
                         provider = build_provider_for(evidence)
-                    except Exception as exc:  # noqa: BLE001 - no source, several sources, bad credentials
+                    except repo_verify.NoEvidenceSourceError:
+                        evidence, provider = None, None  # store-only portals: nothing to fetch
+                    except Exception as exc:  # noqa: BLE001 - several sources, unknown name, bad credentials
                         out.write(f"error: {exc}\n")
                         return 2
                     repo = repo_verify.verify_against_repo(db.session, provider, source=evidence,
@@ -415,6 +490,34 @@ def run(args, out=sys.stdout) -> int:
                                                  f"{first['issue']}"}
                     elif repo["status"] == "unverified" and result["status"] in ("valid", "intact_with_forks"):
                         result["status"] = "unverified"
+                if args.against_store:
+                    from app.services.evidence_store import store
+                    from app.services.evidence_store.verify import verify_decision_logs_against_store
+
+                    against_store = verify_decision_logs_against_store(
+                        db.session, store.s3_client(), after_session=args.after_session,
+                        max_sessions=args.max_sessions)
+                    checked["against_store"] = against_store
+                    if against_store["status"] == "broken":
+                        result["status"] = "broken"
+                        first = (against_store["mismatches"] or against_store["missing"]
+                                 or against_store["unreadable"])[0]
+                        result["first_break"] = result.get("first_break") or {
+                            "id": None, "issue": f"Decision log {first['session_id']} against the evidence store: "
+                                                 f"{first['issue']}"}
+            if args.evidence_store:
+                from app.services.evidence_store import store
+                from app.services.evidence_store.verify import verify_store
+
+                db.session.commit()  # no transaction is held while S3 answers
+                stored = verify_store(db.session, store.s3_client(), store_bucket(), full=args.full)
+                result["evidence_store"] = stored
+                if stored["status"] == "broken":
+                    result["status"] = "broken"
+                    result["first_break"] = result.get("first_break") or {
+                        "id": None, "issue": "Evidence store: " + _first_store_failure(stored)}
+                elif stored["status"] == "unverified" and result["status"] in ("valid", "intact_with_forks", "empty"):
+                    result["status"] = "unverified"
             if args.json:
                 out.write(json.dumps(result, indent=2, default=str) + "\n")
             else:
@@ -461,8 +564,22 @@ def run(args, out=sys.stdout) -> int:
                         for name in ("mismatches", "missing", "unreadable", "missing_commit"):
                             for finding in repo[name][:10]:
                                 out.write(f"against-repo {name}: {json.dumps(finding, default=str)}\n")
+                    against_store = checked.get("against_store")
+                    if against_store:
+                        out.write(f"against_store: status={against_store['status']} "
+                                  f"versions={against_store['versions_checked']} "
+                                  f"objects={against_store['objects_checked']} "
+                                  f"mismatches={against_store['mismatches_count']} "
+                                  f"missing={against_store['missing_count']} "
+                                  f"unreadable={against_store['unreadable_count']} "
+                                  f"erased={against_store['erased_count']}\n")
+                        for name in ("mismatches", "missing", "unreadable"):
+                            for finding in against_store[name][:10]:
+                                out.write(f"against-store {name}: {json.dumps(finding, default=str)}\n")
                     if checked.get("next_after_session"):
                         out.write(f"next_after_session={checked['next_after_session']}\n")
+                if result.get("evidence_store"):
+                    _write_store_summary(result["evidence_store"], out)
                 if result.get("first_break"):
                     out.write(f"first_break={json.dumps(result['first_break'])}\n")
             return {"valid": 0, "empty": 0, "intact_with_forks": 3, "unverified": 4}.get(result["status"], 1)

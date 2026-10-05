@@ -486,6 +486,8 @@ def admin_audit_log():
         "team_members", "portal_settings", "collector_config", "collector_run",
         "collector_check_result", "decision_log_sessions",
         "git_sources", "git_source_files", "git_file_versions", "git_commits", "git_sync_runs",
+        "evidence_store_objects", "evidence_store_sync_runs", "evidence_store_retention_floors",
+        "evidence_documents", "evidence_document_links",
     ]
 
     # Resolve changed_by UUIDs to member names
