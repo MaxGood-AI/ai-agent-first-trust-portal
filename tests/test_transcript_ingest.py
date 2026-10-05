@@ -286,6 +286,15 @@ def test_codex_deeply_nested_arguments_stay_raw_text():
     assert json.loads(parsed.entries[0]["tool_calls"])[0]["input"] == nested
 
 
+def test_a_line_nested_deeper_than_the_limit_is_refused():
+    def line(depth):
+        return '{"type":"user","message":{"content":"x"},"n":' + "[" * depth + "]" * depth + "}"
+
+    parse_transcript(line(transcript_ingest.MAX_LINE_DEPTH - 1))
+    with pytest.raises(transcript_ingest.TranscriptError, match="nested deeper than 64"):
+        parse_transcript(line(transcript_ingest.MAX_LINE_DEPTH))
+
+
 def test_codex_reconstruction_parses_back_to_the_same_entries(app):
     content = _jsonl(CODEX_RECORDS)
     ingest_from_content(content, "cx-recon")

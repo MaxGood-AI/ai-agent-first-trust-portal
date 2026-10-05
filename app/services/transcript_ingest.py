@@ -371,7 +371,8 @@ def parse_transcript(content) -> ParsedTranscript:
     for line_number, line in _lines(content):
         if not line:
             continue
-        _check_line_depth(line, line_number)
+        if len(line) > MAX_LINE_DEPTH:  # a shorter line cannot be nested deeper
+            _check_line_depth(line, line_number)
         try:
             record = json.loads(line)
         except json.JSONDecodeError:
