@@ -34,7 +34,7 @@ from urllib.parse import unquote, urlsplit
 
 import markdown as _markdown
 import nh3
-from flask import abort, current_app, jsonify, request, session
+from flask import abort, current_app, jsonify, render_template, request, session
 from markupsafe import Markup
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -262,7 +262,18 @@ def _api_json_errors(error):
         response = jsonify({"error": error.description or error.name})
         response.status_code = error.code or 500
         return response
+    if error.code == 404:
+        return _not_found_page(error)
     return error
+
+
+def _not_found_page(error):
+    """The portal-styled 404 page; Werkzeug's own page when the portal cannot render one."""
+    try:
+        return render_template("errors/404.html"), 404
+    except Exception:  # noqa: BLE001 - the error page must never raise (database down, template fault)
+        current_app.logger.exception("could not render the 404 page")
+        return error
 
 
 def register_security(app) -> None:

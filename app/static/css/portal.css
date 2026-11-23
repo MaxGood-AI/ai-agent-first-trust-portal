@@ -12,16 +12,31 @@
     --text-muted: #718096;
     --border: #e2e8f0;
     --radius: 8px;
+    /* Pages set both fonts as a style attribute on <html>; these are the defaults. */
+    --heading-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --text-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-family: var(--text-font);
     background: var(--bg);
     color: var(--text);
     line-height: 1.6;
 }
+
+/* Headings and titles use the heading font; form controls and code keep their own rules. */
+h1, h2, h3, h4, h5, h6,
+nav .brand,
+.score-card .score, .category-card .score, .stat-card .stat,
+.collector-widget-stat .stat-value {
+    font-family: var(--heading-font);
+}
+
+button, input, select, textarea { font: inherit; }
+
+pre, code, kbd, samp { font-family: monospace; }
 
 /* Navigation */
 header {

@@ -34,6 +34,16 @@
         </label>
     </div>
 
+    <h2>Fonts</h2>
+    <div style="display: grid; gap: 0.75rem; max-width: 600px;">
+        <label>Heading font (a CSS font-family list; blank restores the default):
+            <input type="text" name="heading_font" maxlength="300" value="{{ settings.heading_font if settings.heading_font != default_font_stack else '' }}" placeholder="{{ default_font_stack }}" style="width: 100%;">
+        </label>
+        <label>Text font (a CSS font-family list; blank restores the default):
+            <input type="text" name="text_font" maxlength="300" value="{{ settings.text_font if settings.text_font != default_font_stack else '' }}" placeholder="{{ default_font_stack }}" style="width: 100%;">
+        </label>
+    </div>
+
     <h2>SOC 2 Journey</h2>
     <div style="display: grid; gap: 0.75rem; max-width: 600px;">
         <label>Current Stage:

@@ -96,6 +96,9 @@ def create_app(config_class=None, *, serving=False):
         "basePath": "/api",
     })
 
+    from app.services.settings_service import safe_font_stack
+    app.jinja_env.filters["font_stack"] = safe_font_stack
+
     @app.context_processor
     def inject_portal_settings():
         from app.services.settings_service import get_portal_settings

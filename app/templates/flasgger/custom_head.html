@@ -1,0 +1,13 @@
+{# Gives Swagger UI (/api/docs/) the portal's two fonts. The stacks are re-validated by the
+   font_stack filter, which leaves quotes as quotes inside this stylesheet. #}
+<style>
+:root {
+    --heading-font: {{ portal.heading_font|font_stack }};
+    --text-font: {{ portal.text_font|font_stack }};
+}
+.swagger-ui :where(*:not(pre):not(code):not(textarea):not(.microlight)) { font-family: var(--text-font) !important; }
+.swagger-ui h1, .swagger-ui h2, .swagger-ui h3, .swagger-ui h4, .swagger-ui h5, .swagger-ui h6,
+.swagger-ui .info .title, .swagger-ui .opblock-tag, .swagger-ui .model-title { font-family: var(--heading-font) !important; }
+.swagger-ui pre, .swagger-ui code, .swagger-ui textarea, .swagger-ui .microlight { font-family: monospace !important; }
+</style>
+{{ flasgger_config.head_text | safe }}

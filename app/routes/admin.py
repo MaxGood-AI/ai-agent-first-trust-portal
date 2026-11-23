@@ -513,10 +513,11 @@ def admin_audit_log():
 @require_api_key
 @require_admin
 def admin_settings():
-    from app.services.settings_service import get_portal_settings, PUBLIC_SECTIONS, SOC2_STAGES
+    from app.services.settings_service import (
+        DEFAULT_FONT_STACK, get_portal_settings, PUBLIC_SECTIONS, SOC2_STAGES)
     settings = get_portal_settings()
     return render_template("admin/settings.html", settings=settings, soc2_stages=SOC2_STAGES,
-                           public_sections=PUBLIC_SECTIONS)
+                           public_sections=PUBLIC_SECTIONS, default_font_stack=DEFAULT_FONT_STACK)
 
 
 @admin_bp.route("/settings", methods=["POST"])
@@ -544,6 +545,8 @@ def admin_settings_update():
         "legal_content_md": request.form.get("legal_content_md") or None,
         "legal_external_url": request.form.get("legal_external_url") or None,
         "ai_transparency_md": request.form.get("ai_transparency_md") or None,
+        "heading_font": request.form.get("heading_font", "").strip() or None,
+        "text_font": request.form.get("text_font", "").strip() or None,
     }
     if "public_sections_form" in request.form:
         data["public_sections"] = request.form.getlist("public_sections")

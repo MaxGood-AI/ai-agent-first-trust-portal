@@ -89,6 +89,7 @@ REVISION_LOCKS = {
     "019": (("team_members",), False),
     "020": ((), False),
     "021": (("controls", "test_records", "pentest_findings", "team_members", "decision_log_transcripts"), False),
+    "022": (("portal_settings",), False),
 }
 
 

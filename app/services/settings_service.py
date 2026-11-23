@@ -14,7 +14,10 @@ in Admin > Portal Settings or with ``PUT /api/settings``
 is recorded in the audit log (``portal_settings`` is an audited table).
 """
 
+import re
+
 from flask import current_app
+from markupsafe import Markup
 
 from app.models import db
 from app.models.portal_settings import PortalSettings
@@ -34,6 +37,22 @@ PUBLIC_SECTIONS = (
 PUBLIC_SECTION_KEYS = tuple(key for key, _, _ in PUBLIC_SECTIONS)
 DEFAULT_PUBLIC_SECTIONS = tuple(key for key in PUBLIC_SECTION_KEYS if key != "risks")
 
+# Fonts
+# -----
+# ``heading_font`` and ``text_font`` are plain CSS ``font-family`` lists. A stored NULL
+# means :data:`DEFAULT_FONT_STACK`. Pages emit them as the custom properties
+# ``--heading-font`` and ``--text-font``, so a value is accepted only when it cannot
+# carry anything but family names (:func:`validate_font_stack`).
+DEFAULT_FONT_STACK = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+FONT_FIELDS = ("heading_font", "text_font")
+MAX_FONT_STACK_LENGTH = 300
+# A family name is words of letters and digits joined by single spaces; a word starts with
+# a letter, optionally after one hyphen, and may contain hyphens (``-apple-system``).
+_UNQUOTED_WORD = re.compile(r"-?[^\W\d_](?:[^\W_]|-)*")
+_QUOTED_NAME = re.compile(r"[^\W_](?:[^\W_]|[ -])*")
+_FORBIDDEN_WORDS = {"url", "expression"}
+_CSS_WIDE_KEYWORDS = {"inherit", "initial", "unset", "revert", "revert-layer", "default"}
+
 SOC2_STAGES = [
     {"key": "not_started", "label": "Not Started", "has_date": False},
     {"key": "policies_established", "label": "Policies & Controls Established", "has_date": False},
@@ -43,6 +62,63 @@ SOC2_STAGES = [
     {"key": "collecting_continuous", "label": "Collecting Continuous Evidence", "has_date": False},
     {"key": "type_2_completed", "label": "Type 2 Audit Completed", "has_date": True},
 ]
+
+
+def validate_font_stack(value, field="font"):
+    """The canonical stored form of a font setting.
+
+    ``None`` stays None (the default stack). Anything else must be a plain
+    ``font-family`` list of at most :data:`MAX_FONT_STACK_LENGTH` characters:
+    comma-separated families, each an unquoted name (words of letters, digits
+    and hyphens, each starting with a letter), a quoted name (letters, digits,
+    spaces and hyphens) or a generic family. Semicolons, braces, angle
+    brackets, backslashes, slashes, parentheses, colons, ``@``, ``url``,
+    ``expression``, control characters, empty items and the CSS-wide keywords
+    are refused with ValueError naming ``field``. The result joins the families
+    with ``, ``.
+    """
+    if value is None:
+        return None
+    problem = f"{field} must be a plain font-family list (comma-separated family names)"
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(problem)
+    if len(value) > MAX_FONT_STACK_LENGTH:
+        raise ValueError(f"{field} must be at most {MAX_FONT_STACK_LENGTH} characters")
+    families = []
+    for item in value.split(","):
+        item = item.strip(" ")
+        quote = item[:1] if item[:1] in ("'", '"') else ""
+        if quote:
+            name = item[1:-1] if len(item) >= 3 and item.endswith(quote) else None
+            valid = name is not None and _QUOTED_NAME.fullmatch(name) is not None
+            words = name.lower().split() if valid else []
+            valid = valid and not _FORBIDDEN_WORDS.intersection(words)
+        else:
+            words = item.lower().split(" ")
+            valid = bool(item) and all(_UNQUOTED_WORD.fullmatch(word) for word in words)
+            valid = valid and not (_FORBIDDEN_WORDS | _CSS_WIDE_KEYWORDS).intersection(words)
+        if not valid:
+            raise ValueError(problem)
+        families.append(item)
+    return ", ".join(families)
+
+
+def effective_font_stack(value):
+    """The stack a page uses for a stored font value: the value when it is valid, else the default."""
+    try:
+        return validate_font_stack(value) or DEFAULT_FONT_STACK
+    except ValueError:
+        return DEFAULT_FONT_STACK
+
+
+def safe_font_stack(value):
+    """A font stack for a ``<style>`` element (Jinja filter ``font_stack``): re-validated, never escaped.
+
+    A validated stack holds no ``<``, ``&`` or ``;``, so it is safe verbatim
+    inside a stylesheet; its quotes stay quotes, which autoescaping would turn into entities
+    that CSS does not decode.
+    """
+    return Markup(effective_font_stack(value))
 
 
 def get_portal_settings():
@@ -127,6 +203,8 @@ def get_portal_settings():
         "legal_external_url": legal_external_url,
         "ai_transparency_md": ai_transparency_md,
         "public_sections": public_sections,
+        "heading_font": effective_font_stack(db_settings.heading_font if db_settings else None),
+        "text_font": effective_font_stack(db_settings.text_font if db_settings else None),
     }
 
 
@@ -159,8 +237,9 @@ URL_FIELDS = ("website_url", "legal_external_url")
 def update_portal_settings(data, updated_by=None):
     """Create or update the single portal_settings row.
 
-    Raises ValueError when a URL field is not an http(s) URL or
-    ``public_sections`` is invalid (see :func:`validate_public_sections`).
+    Raises ValueError when a URL field is not an http(s) URL, ``public_sections``
+    is invalid (see :func:`validate_public_sections`) or a font field is not a
+    plain font list (see :func:`validate_font_stack`); nothing is saved then.
     """
     from app.security import is_http_url
 
@@ -169,6 +248,9 @@ def update_portal_settings(data, updated_by=None):
             raise ValueError(f"{field} must be an http(s) URL")
     if "public_sections" in data:
         data = dict(data, public_sections=validate_public_sections(data["public_sections"]))
+    for field in FONT_FIELDS:
+        if field in data:
+            data = dict(data, **{field: validate_font_stack(data[field], field)})
     settings = db.session.get(PortalSettings, 1)
     if not settings:
         settings = PortalSettings(id=1)
@@ -179,6 +261,7 @@ def update_portal_settings(data, updated_by=None):
         "soc2_current_stage", "soc2_stage_dates",
         "legal_content_md", "legal_external_url",
         "ai_transparency_md", "public_sections",
+        *FONT_FIELDS,
     ]
     for key in allowed_fields:
         if key in data:

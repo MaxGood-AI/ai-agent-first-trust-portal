@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Not found{% endblock %}
+
+{% block content %}
+<section class="narrow-page">
+    <h1>Page not found</h1>
+    <p class="lede">Not found: nothing is published at this address.</p>
+    {% if "overview" in portal.public_sections %}
+    <p><a href="{{ url_for('portal.index') }}">Go to the overview</a></p>
+    {% endif %}
+</section>
+{% endblock %}

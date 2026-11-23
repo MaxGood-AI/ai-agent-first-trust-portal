@@ -23,6 +23,9 @@ class PortalSettings(db.Model):
     ai_transparency_md = db.Column(db.Text)
     # Public sections (NULL = default set; the risk register is private by default)
     public_sections = db.Column(db.JSON)
+    # Fonts: a plain CSS font-family list; NULL = the default system stack
+    heading_font = db.Column(db.String(300))
+    text_font = db.Column(db.String(300))
     # Metadata
     updated_at = db.Column(db.DateTime(timezone=True))
     updated_by = db.Column(db.String(36))
