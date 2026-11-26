@@ -89,6 +89,13 @@ supplied decision logs keeps the two decision-log mappings after the six dataset
 - `policy-index.json` entries set `file_path` to the policy's path in the governance
   repository (for example `policies/access-control-policy.md`); leading `../` segments are
   ignored, so paths written relative to a sibling checkout resolve too.
+- `policy-index.json` entries may set `slug`, the policy's permanent public address:
+  `/policies/<slug>` shows the current approved version of the policy, alongside
+  `/policies/<id>`. A slug is lowercase ASCII letters and digits in hyphen-separated groups
+  (`^[a-z0-9]+(-[a-z0-9]+)*$`, at most 100 characters), is never shaped like a uuid, and is unique
+  across the index; an import skips an entry whose slug is invalid or already used by another
+  entry, with an error line. A request answers 404 when the slug belongs to no approved policy
+  or to more than one. The slug is kept in the record's `other_data`.
 
 ## Pentest evidence
 

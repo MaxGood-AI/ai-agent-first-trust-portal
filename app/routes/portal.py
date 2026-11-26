@@ -83,13 +83,20 @@ def policies():
 @portal_bp.route("/policies/<policy_id>")
 @public_section("policies")
 def policy_detail(policy_id):
-    """Display a single approved policy, rendered from the current version
-    synced from the governance git source. A policy whose synced file was
-    deleted from the repository is shown as retired, with no document. Its
-    linked controls are listed only while the controls section is published."""
+    """Display a single approved policy, addressed by id or by its optional slug.
+
+    The value is resolved as an id first, then as the slug of an approved
+    policy; a slug shared by several approved policies answers 404. The page
+    renders the current version synced from the governance git source. A
+    policy whose synced file was deleted from the repository is shown as
+    retired, with no document. Its linked controls are listed only while the
+    controls section is published."""
     from app.services.settings_service import section_enabled
 
     policy = db.session.get(Policy, policy_id)
+    if policy is None:
+        matches = [row for row in Policy.query.filter_by(status="approved") if row.slug == policy_id]
+        policy = matches[0] if len(matches) == 1 else None
     if not policy or policy.status != "approved":
         abort(404)
 

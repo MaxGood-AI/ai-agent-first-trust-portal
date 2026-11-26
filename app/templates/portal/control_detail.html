@@ -50,7 +50,7 @@
 <h2>Linked Policies</h2>
 <ul>
     {% for policy in linked_policies %}
-    <li><a href="{{ url_for('portal.policy_detail', policy_id=policy.id) }}">{{ policy.title }}</a></li>
+    <li><a href="{{ url_for('portal.policy_detail', policy_id=policy.public_ref) }}">{{ policy.title }}</a></li>
     {% endfor %}
 </ul>
 {% endif %}

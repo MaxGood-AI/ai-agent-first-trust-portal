@@ -27,7 +27,7 @@ PUBLIC_SECTIONS = (
     ("overview", "Overview", "/"),
     ("status", "Compliance status", "/status"),
     ("controls", "Controls", "/controls, /controls/<id>"),
-    ("policies", "Policies (approved only)", "/policies, /policies/<id>"),
+    ("policies", "Policies (approved only)", "/policies, /policies/<id or slug>"),
     ("systems", "Systems", "/systems"),
     ("vendors", "Vendors", "/vendors"),
     ("risks", "Risk register", "/risks"),

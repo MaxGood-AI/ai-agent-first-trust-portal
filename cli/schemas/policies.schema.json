@@ -9,6 +9,13 @@
     "properties": {
       "id": { "type": "string", "format": "uuid" },
       "title": { "type": "string" },
+      "slug": {
+        "type": "string",
+        "maxLength": 100,
+        "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+        "not": { "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+        "description": "Optional permanent public address: /policies/<slug> shows the current approved version. Lowercase letters and digits in hyphen-separated groups, never uuid-shaped, unique across the index. Stored in other_data."
+      },
       "short_name": { "type": "string", "description": "e.g., POL-1. Stored in other_data." },
       "category": { "type": "string", "enum": ["security", "availability", "confidentiality", "privacy", "processing_integrity"] },
       "security_group": { "type": "string", "description": "Stored in other_data." },

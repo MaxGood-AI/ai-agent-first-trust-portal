@@ -48,5 +48,16 @@ class Policy(db.Model):
 
     controls = db.relationship("Control", secondary=policy_controls, backref="policies")
 
+    @property
+    def slug(self):
+        """The policy's permanent public address segment, or None when it has none."""
+        value = (self.other_data or {}).get("slug")
+        return value if isinstance(value, str) and value else None
+
+    @property
+    def public_ref(self):
+        """The value of ``/policies/<value>``: the slug when set, else the id."""
+        return self.slug or self.id
+
     def __repr__(self):
         return f"<Policy {self.title} v{self.version}>"

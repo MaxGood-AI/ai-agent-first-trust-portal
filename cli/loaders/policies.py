@@ -1,7 +1,24 @@
 """Loader for policy-index.json → Policy model with soc2_control_ids M2M."""
 
+import re
+
 from app.models import Control, Policy
-from cli.loaders.base import BaseLoader, LinkSpec
+from cli.loaders.base import BaseLoader, LinkSpec, SkipRecord
+
+# Mirrors the `slug` property of cli/schemas/policies.schema.json.
+SLUG_PATTERN = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+UUID_PATTERN = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+SLUG_MAX_LENGTH = 100
+
+
+def slug_problem(value):
+    """Why ``value`` is not a valid policy slug, or None when it is valid."""
+    if not isinstance(value, str) or not SLUG_PATTERN.match(value) or len(value) > SLUG_MAX_LENGTH:
+        return (f"slug {value!r} must be lowercase letters and digits in hyphen-separated groups, "
+                f"at most {SLUG_MAX_LENGTH} characters")
+    if UUID_PATTERN.match(value):
+        return f"slug {value!r} must not be shaped like a uuid"
+    return None
 
 
 class PoliciesLoader(BaseLoader):
@@ -19,3 +36,17 @@ class PoliciesLoader(BaseLoader):
     def _build_record(self, item):
         """Extract owner.id/owner.name from nested object before standard build."""
         return super()._build_record(self._with_owner(item))
+
+    def resolve_references(self, item, record, ctx):
+        """A slug must be valid and belong to one policy in the import run."""
+        slug = (record.get("other_data") or {}).get("slug")
+        if slug is None:
+            return None
+        problem = slug_problem(slug)
+        if problem:
+            raise SkipRecord(problem)
+        owners = ctx.cache.setdefault("policy_slugs", {})
+        owner = owners.setdefault(slug, record.get("id"))
+        if owner != record.get("id"):
+            raise SkipRecord(f"slug {slug!r} is already used by policy {owner}")
+        return None

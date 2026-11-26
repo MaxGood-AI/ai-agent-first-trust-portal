@@ -276,3 +276,47 @@ def test_navigation_has_ai_transparency(client):
     """Navigation must have AI Transparency link."""
     resp = client.get("/")
     assert b"ai-transparency" in resp.data
+
+
+# --- Policy slugs ---
+
+def _add_policy(pid, title, status="approved", slug=None):
+    db.session.add(Policy(id=pid, title=title, category="security", status=status,
+                          other_data={"slug": slug} if slug else {}))
+    db.session.commit()
+
+
+def test_portal_policy_slug_serves_approved_policy(app_ctx, client):
+    _add_policy("11111111-1111-4111-8111-111111111111", "Privacy Policy", slug="privacy-policy")
+    resp = client.get("/policies/privacy-policy")
+    assert resp.status_code == 200
+    assert b"Privacy Policy" in resp.data
+    assert client.get("/policies/11111111-1111-4111-8111-111111111111").status_code == 200
+
+
+def test_portal_policy_slug_of_unapproved_policy_is_404(app_ctx, client):
+    _add_policy("pol-s-draft", "Draft", status="draft", slug="draft-policy")
+    assert client.get("/policies/draft-policy").status_code == 404
+    assert client.get("/policies/unknown-slug").status_code == 404
+
+
+def test_portal_policy_duplicate_slug_serves_neither(app_ctx, client):
+    _add_policy("pol-dup-1", "One", slug="shared")
+    _add_policy("pol-dup-2", "Two", slug="shared")
+    assert client.get("/policies/shared").status_code == 404
+    assert client.get("/policies/pol-dup-1").status_code == 200
+
+
+def test_portal_policy_duplicate_slug_with_unapproved_row_serves_the_approved_one(app_ctx, client):
+    _add_policy("pol-dup-3", "Three", slug="shared-two")
+    _add_policy("pol-dup-4", "Four", status="draft", slug="shared-two")
+    assert client.get("/policies/shared-two").status_code == 200
+
+
+def test_policy_library_links_to_slug_or_id(app_ctx, client):
+    _add_policy("pol-lib-1", "Slugged", slug="slugged-policy")
+    _add_policy("pol-lib-2", "Plain")
+    body = client.get("/policies").data
+    assert b'href="/policies/slugged-policy"' in body
+    assert b'href="/policies/pol-lib-1"' not in body
+    assert b'href="/policies/pol-lib-2"' in body

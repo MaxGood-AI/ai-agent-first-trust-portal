@@ -1244,3 +1244,45 @@ def test_import_directory_reports_rejected_transcripts(app, tmp_path):
     assert any("sess-r.jsonl: rejected (entry 1 differs" in line for line in result["errors"])
     db.session.expire_all()
     assert DecisionLogTranscript.query.filter_by(session_id="sess-r", status="rejected").count() == 1
+
+
+# --------------------------------------------------------------------------
+# Policy slugs
+# --------------------------------------------------------------------------
+
+def test_policy_schema_slug_rules():
+    import re
+    from pathlib import Path
+    schema = json.loads((Path(__file__).parent.parent / "cli/schemas/policies.schema.json").read_text())
+    slug = schema["items"]["properties"]["slug"]
+    assert re.match(slug["pattern"], "privacy-policy")
+    for bad in ("Privacy", "a--b", "-a", "a b", "a_b"):
+        assert not re.match(slug["pattern"], bad)
+    assert re.match(slug["not"]["pattern"], str(uuid.uuid4()))
+    assert not re.match(slug["not"]["pattern"], "privacy-policy")
+
+
+def test_policy_slug_validation_matches_schema():
+    from cli.loaders.policies import slug_problem
+    assert slug_problem("privacy-policy") is None
+    assert slug_problem("p2") is None
+    for bad in ("Privacy", "a--b", "", "a b", "x" * 101, 5, str(uuid.uuid4())):
+        assert slug_problem(bad)
+
+
+def test_import_refuses_invalid_and_repeated_policy_slugs(app):
+    items = [
+        {"id": "p-ok", "title": "Ok", "category": "privacy", "slug": "privacy-policy"},
+        {"id": "p-dup", "title": "Dup", "category": "privacy", "slug": "privacy-policy"},
+        {"id": "p-bad", "title": "Bad", "category": "privacy", "slug": "Not Valid"},
+        {"id": "p-uuid", "title": "Uuid", "category": "privacy", "slug": str(uuid.uuid4())},
+        {"id": "p-none", "title": "None", "category": "privacy"},
+    ]
+    counts = import_dataset_file("policies", "policy-index.json", items)
+    assert (counts.created, counts.skipped) == (2, 3)
+    assert db.session.get(Policy, "p-ok").slug == "privacy-policy"
+    assert db.session.get(Policy, "p-dup") is None
+    joined = "\n".join(counts.errors)
+    assert "already used by policy p-ok" in joined
+    assert "must be lowercase" in joined
+    assert "uuid" in joined
