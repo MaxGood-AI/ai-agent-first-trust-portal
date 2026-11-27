@@ -42,6 +42,9 @@ class BaseLoader:
         field_map    — dict mapping JSON keys to model column names
         value_maps   — dict of {column: {json_val: model_val}} for enum translation
         link         — optional :data:`LinkSpec` for a many-to-many list of ids
+        three_way_merge — True when a changed file is imported as a column-level
+                       merge of what changed since its previous version (see
+                       :mod:`app.services.evidence_import`)
     """
 
     dataset = None
@@ -50,6 +53,7 @@ class BaseLoader:
     field_map = {}
     value_maps = {}
     link = None
+    three_way_merge = False
 
     def _get_model_columns(self):
         """Return the set of column attribute names on the model."""

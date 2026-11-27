@@ -25,12 +25,30 @@ with the stored row and only the columns whose values differ are updated; a
 file identical to what is stored issues no INSERT, UPDATE or DELETE at all.
 Every call reports created / updated / unchanged / deleted / skipped counts.
 
+A dataset whose loader sets ``three_way_merge`` (the tests dataset) is
+imported as a column-level three-way merge when the caller supplies the
+previously imported version of the same file: the database and the API are
+the system of record (``docs/adr/001-db-as-system-of-record.md``), so results
+recorded there survive an import of a file that did not change them. For a
+record present in both versions only the columns whose file value changed
+between the two versions (compared in the database vocabulary, after the
+loader's value maps and coercion) are compared with the stored row and
+written; a record unchanged in the file is not written at all; a record that
+is new in the file, or whose row is not stored, is imported in full. Without
+a previous version (a first import of a path, content that is unavailable or
+does not parse, ``cli import``, a full re-import) every record's columns are
+compared with the stored row.
+
 Public API
 ----------
-``import_dataset_file(dataset, path, data, namespace=None)``
-    Import one dataset file (bytes, JSON text or parsed data). Flushes, does
+``import_dataset_file(dataset, path, data, namespace=None, previous=None)``
+    Import one dataset file (bytes, JSON text or parsed data); ``previous``
+    is the previously imported version of the same file, which selects the
+    three-way merge above for a dataset that supports it. Flushes, does
     not commit. Used by the git-source sync for each changed file, with the
     source id as ``namespace``.
+``merges_changes(dataset)``
+    True when the dataset is imported as a three-way merge.
 ``remove_dataset_file(dataset, path, namespace=None)``
     A mapped file was deleted from the repository.
 ``import_decision_log(content, ...)``
@@ -509,14 +527,22 @@ def _sync_links(loader, obj, values, counts, ctx, label):
 
 
 def _sync_records(loader, entries, counts, ctx, existing=None):
-    """Create or update each ``(label, values)`` entry, writing only differences."""
+    """Create or update each entry, writing only differences.
+
+    An entry is ``(label, values)`` or ``(label, values, changed)``; for a
+    stored record ``changed`` (the columns whose file value changed since the
+    previous version of the file) limits the comparison and the write to those
+    columns. A record that is not stored is created from all of ``values``.
+    """
     model = loader.model_class
     columns = model.__table__.columns
     required = _required_columns(model)
     if existing is None:
-        existing = _load_existing(model, [values["id"] for _, values in entries])
+        existing = _load_existing(model, [entry[1]["id"] for entry in entries])
 
-    for label, values in entries:
+    for entry in entries:
+        label, values = entry[0], entry[1]
+        changed = entry[2] if len(entry) > 2 else None
         obj = existing.get(values["id"])
         if obj is None:
             missing = [key for key in required if values.get(key) is None]
@@ -533,6 +559,9 @@ def _sync_records(loader, entries, counts, ctx, existing=None):
             _sync_links(loader, new_obj, values, counts, ctx, label)
             continue
 
+        if changed is not None:
+            values = {key: value for key, value in values.items()
+                      if key == "id" or key in changed or key in _BOOKKEEPING_COLUMNS}
         nulls = [key for key in required if key in values and values[key] is None]
         if nulls:
             counts.skipped += 1
@@ -549,8 +578,49 @@ def _sync_records(loader, entries, counts, ctx, existing=None):
             counts.unchanged += 1
 
 
-def _import_list_dataset(loader, path, parsed, counts, ctx):
+def _previous_values(loader, previous):
+    """``{id: coerced column values}`` of the records of the previous file version.
+
+    Records that cannot be built are left out (they import in full).
+    """
     from cli.loaders.base import SkipRecord
+
+    model = loader.model_class
+    known = {}
+    for item in previous:
+        if not isinstance(item, dict):
+            continue
+        try:
+            record = loader._build_record(item)
+            if record is None or record.get("id") in (None, ""):
+                continue
+            values = coerce_record(model, record)
+        except (SkipRecord, ValueError, TypeError):
+            continue
+        known[values["id"]] = values
+    return known
+
+
+def _changed_columns(model, before, after):
+    """Columns whose value in the file differs between two versions of a record."""
+    columns = model.__table__.columns
+
+    def comparable(key, value):
+        # ``_original_<column>`` notes the file's spelling of a mapped value: the
+        # column it belongs to decides whether the value changed.
+        if key == "other_data" and isinstance(value, dict):
+            return {name: item for name, item in value.items() if not name.startswith("_original_")}
+        return value
+
+    return {key for key, value in after.items()
+            if key not in before
+            or not values_equal(columns[key], comparable(key, before[key]), comparable(key, value))}
+
+
+def _import_list_dataset(loader, path, parsed, counts, ctx, previous=None):
+    from cli.loaders.base import SkipRecord
+
+    known = _previous_values(loader, previous) if isinstance(previous, list) else None
 
     if not isinstance(parsed, list):
         counts.skipped += 1
@@ -572,6 +642,7 @@ def _import_list_dataset(loader, path, parsed, counts, ctx):
             if record.get("id") in (None, ""):
                 raise SkipRecord("id is missing")
             label = f"{label} (id={record['id']})"
+            in_file = coerce_record(model, record) if known is not None else None
             warnings = loader.resolve_references(item, record, ctx)
             values = coerce_record(model, record)
             _check_lengths(model, values)
@@ -583,13 +654,16 @@ def _import_list_dataset(loader, path, parsed, counts, ctx):
         for warning in warnings or ():
             counts.error(f"{label}: {warning}")
         record_id = values["id"]
+        entry = (label, values)
+        if known is not None and record_id in known:
+            entry = (label, values, _changed_columns(model, known[record_id], in_file))
         if record_id in position:
             counts.skipped += 1
             counts.error(f"{label}: duplicate id in file; the last occurrence is imported")
-            entries[position[record_id]] = (label, values)
+            entries[position[record_id]] = entry
         else:
             position[record_id] = len(entries)
-            entries.append((label, values))
+            entries.append(entry)
     _sync_records(loader, entries, counts, ctx)
 
 
@@ -881,12 +955,12 @@ def _loader_for(dataset):
     return loader_class()
 
 
-def _import_parsed(loader, path, parsed, ctx):
+def _import_parsed(loader, path, parsed, ctx, previous=None):
     counts = ImportCounts()
     if hasattr(loader, "build_file_records"):
         _import_pentest_file(loader, path, parsed, counts, ctx)
     else:
-        _import_list_dataset(loader, path, parsed, counts, ctx)
+        _import_list_dataset(loader, path, parsed, counts, ctx, previous)
     if not ctx.dry_run:
         db.session.flush()
     return counts
@@ -896,21 +970,36 @@ def _import_parsed(loader, path, parsed, ctx):
 # Public API
 # --------------------------------------------------------------------------
 
+def merges_changes(dataset: str) -> bool:
+    """True when ``dataset`` is imported as a three-way merge (see the module docstring)."""
+    return bool(getattr(_loader_for(dataset), "three_way_merge", False))
+
+
 def import_dataset_file(dataset: str, path: str, data, *, dry_run: bool = False,
-                        namespace: str | None = None) -> ImportCounts:
+                        namespace: str | None = None, previous=None) -> ImportCounts:
     """Import one dataset file, writing only real differences.
 
     ``data`` is the file's bytes, its JSON text, or already-parsed JSON;
     ``path`` is its repository-relative path (for pentest evidence it
     determines ``source_file``, within ``namespace``; see "Namespaces").
-    Flushes but does not commit. Raises ValueError for an unknown dataset or
-    unparseable JSON.
+    ``previous`` is the previously imported version of the file (same forms as
+    ``data``); for a dataset that merges changes it limits the writes to what
+    changed in the file since that version, and content that does not parse
+    is ignored. Flushes but does not commit. Raises ValueError for an unknown
+    dataset or unparseable JSON.
     """
     if namespace == STORE_NAMESPACE:
         raise ValueError("the evidence store's namespace is written only by the evidence store's sync")
     loader = _loader_for(dataset)
     parsed = _parse_json(path, data)
-    return _import_parsed(loader, path, parsed, ImportContext(dry_run=dry_run, namespace=namespace))
+    before = None
+    if previous is not None and getattr(loader, "three_way_merge", False):
+        try:
+            before = _parse_json(path, previous)
+        except ValueError:
+            before = None
+    return _import_parsed(loader, path, parsed, ImportContext(dry_run=dry_run, namespace=namespace),
+                          before)
 
 
 def remove_dataset_file(dataset: str, path: str, *, dry_run: bool = False,

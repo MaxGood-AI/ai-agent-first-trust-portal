@@ -8,6 +8,7 @@ class TestsLoader(BaseLoader):
     dataset = "tests"
     model_class = TestRecord
     file_name = "tests.json"
+    three_way_merge = True  # results recorded through the API and collectors survive an import
 
     field_map = {}
 

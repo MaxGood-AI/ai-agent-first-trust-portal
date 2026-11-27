@@ -1958,3 +1958,87 @@ def test_a_second_deadlock_records_a_file_error(app, gov_repo, gov_source, monke
     assert run.counts == counts(created=3, errors=1)
     assert files_of(gov_source)["CLAUDE.md"].status == "error"
     assert "OperationalError" in files_of(gov_source)["CLAUDE.md"].status_detail
+
+
+# --------------------------------------------------------------------------
+# A changed tests.json is merged against the version the last import read
+# --------------------------------------------------------------------------
+
+MERGE_TESTS = [
+    {"id": "t1", "control_id": "c1", "name": "MFA test", "status": "not_run", "evidence_status": "missing"},
+    {"id": "t2", "control_id": "c2", "name": "Backup test", "status": "not_run", "evidence_status": "missing"},
+]
+
+
+@pytest.fixture
+def merge_source(app):
+    return service.create_source(base(name="fake-evidence", role="evidence", repository="/unused"))
+
+
+def _merge_commit(fake, label, tests):
+    return fake.commit(label, {"controls.json": json.dumps(EV_CONTROLS), "tests.json": json.dumps(tests)},
+                       changed=["tests.json"])
+
+
+def test_sync_keeps_recorded_results_when_another_test_changed(app, fake, merge_source):
+    from app.services.test_execution import apply_outcome
+
+    _merge_commit(fake, "c1", MERGE_TESTS)
+    assert run_sync(merge_source).status == "success"
+    apply_outcome(db.session.get(ControlTestRow, "t1"), "failure", finding="api finding")
+    apply_outcome(db.session.get(ControlTestRow, "t2"), "success", comment="collector comment",
+                  evidence_submitted=True)
+    db.session.commit()
+
+    renamed = [MERGE_TESTS[0], dict(MERGE_TESTS[1], name="Backup test renamed")]
+    _merge_commit(fake, "c2", renamed)
+    run = run_sync(merge_source)
+
+    assert run.status == "success"
+    assert run.details["by_kind"]["dataset:tests"]["updated"] == 1
+    assert run.details["by_kind"]["dataset:tests"]["unchanged"] == 1
+    first, second = db.session.get(ControlTestRow, "t1"), db.session.get(ControlTestRow, "t2")
+    assert (first.status, first.finding) == ("failed", "api finding")
+    assert (second.name, second.status, second.comment) == ("Backup test renamed", "passed", "collector comment")
+    assert second.evidence_status == "submitted"
+
+
+def test_sync_without_a_readable_previous_version_compares_every_column(app, fake, merge_source,
+                                                                         monkeypatch):
+    from app.services.test_execution import apply_outcome
+
+    _merge_commit(fake, "c1", MERGE_TESTS)
+    run_sync(merge_source)
+    apply_outcome(db.session.get(ControlTestRow, "t1"), "failure", finding="api finding")
+    db.session.commit()
+    first_commit = fake.head
+    _merge_commit(fake, "c2", [MERGE_TESTS[0], dict(MERGE_TESTS[1], name="Backup test renamed")])
+    read_blob = fake.read_blob
+
+    def history_gone(blob_id, *, path=None, commit_id=None, max_bytes=None):
+        if commit_id == first_commit:
+            raise NotFoundError("the earlier history is gone")
+        return read_blob(blob_id, path=path, commit_id=commit_id, max_bytes=max_bytes)
+
+    monkeypatch.setattr(fake, "read_blob", history_gone)
+
+    run = run_sync(merge_source)
+
+    assert run.status == "success"
+    assert db.session.get(ControlTestRow, "t1").status == "pending"
+
+
+def test_full_reimport_compares_every_column(app, fake, merge_source):
+    from app.services.test_execution import apply_outcome
+
+    _merge_commit(fake, "c1", MERGE_TESTS)
+    run_sync(merge_source)
+    apply_outcome(db.session.get(ControlTestRow, "t1"), "failure")
+    db.session.commit()
+
+    run, created = scheduler.enqueue_git_sync(merge_source, "manual", None, full=True)
+    assert created
+    scheduler.execute_claimed("git_sync", run.id)
+    db.session.expire_all()
+
+    assert db.session.get(ControlTestRow, "t1").status == "pending"

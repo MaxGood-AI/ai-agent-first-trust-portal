@@ -31,7 +31,12 @@ One sync (``execute_sync_run``) does:
 
    - ``policy`` / ``governance_document``: store a new ``GitFileVersion``
      (content, SHA-256, commit, blob) and make it current;
-   - ``dataset:<name>``: ``evidence_import.import_dataset_file`` (diff-only),
+   - ``dataset:<name>``: ``evidence_import.import_dataset_file`` (diff-only;
+     for the tests dataset a column-level three-way merge against the version
+     the file's last import read, fetched from the provider by the blob
+     recorded on the file row, so results recorded through the API and by
+     collectors survive an import of a file that did not change them; a full
+     re-import, or a version the provider cannot return, compares every column),
      namespaced by the source id, so pentest findings of two sources never
      replace or delete each other;
    - ``decision_log``: reassemble chunked transcripts (reading no part
@@ -190,6 +195,7 @@ class FetchedFile:
     transcript_path: str | None = None
     exit_reason: str | None = None
     agent: str | None = None
+    previous: bytes | None = None
 
 
 @dataclass(frozen=True)
@@ -477,6 +483,35 @@ def fetch_candidate(provider, candidate: Candidate, head: str) -> FetchedFile:
     return fetched
 
 
+def _previous_content(source, provider, candidate: Candidate) -> bytes | None:
+    """The version of a dataset file the last import read, or None.
+
+    Only a dataset that merges changes (``evidence_import.merges_changes``)
+    has one: the provider returns the blob recorded on the file row, which
+    keeps the blob of the last import that succeeded. Any failure to read it
+    (no recorded blob, history the provider no longer has, an oversized
+    blob) yields None and the file is imported against the stored rows.
+    """
+    from app.services import evidence_import
+
+    dataset = candidate.kind.split(":", 1)[1]
+    try:
+        if not evidence_import.merges_changes(dataset):
+            return None
+        row = (db.session.query(GitSourceFile.blob_id, GitSourceFile.status, GitSourceFile.last_commit_id)
+               .filter_by(source_id=source.id, path=candidate.path).first())
+        if row is None or not row.blob_id or row.status not in ("ok", "incomplete", "error"):
+            return None
+        _end_transaction()
+        return provider.read_blob(row.blob_id, path=candidate.path, commit_id=row.last_commit_id)
+    except Exception as exc:  # noqa: BLE001 - the file is then imported without a previous version
+        logger.info("Git source %s: no previous version of %s (%s)", source.name, candidate.path,
+                    type(exc).__name__)
+        return None
+    finally:
+        _end_transaction()
+
+
 # ----------------------------------------------------------------------------
 # Writing (one database transaction per file)
 # ----------------------------------------------------------------------------
@@ -593,7 +628,7 @@ def process_candidate(source, fetched: FetchedFile, candidate: Candidate, head: 
         tally.add(kind, **{outcome: 1})
     elif kind.startswith("dataset:"):
         counts = evidence_import.import_dataset_file(kind.split(":", 1)[1], candidate.path, content,
-                                                     namespace=source.id)
+                                                     namespace=source.id, previous=fetched.previous)
         tally.add(kind, created=counts.created, updated=counts.updated, unchanged=counts.unchanged,
                   deleted=counts.deleted, skipped=counts.skipped)
         if counts.retired:
@@ -743,7 +778,7 @@ def execute_sync_run(run_id: str) -> GitSyncRun:
         tally.files_changed = len(candidates)
 
         for candidate in candidates:
-            _process_file(source, provider, candidate, head, tally, member_id)
+            _process_file(source, provider, candidate, head, tally, member_id, full)
 
         options = effective_options(source)
         history = CommitHistory()
@@ -771,7 +806,7 @@ def execute_sync_run(run_id: str) -> GitSyncRun:
 
 
 def _process_file(source, provider, candidate: Candidate, head: str, tally: SyncTally,
-                  member_id: str | None) -> None:
+                  member_id: str | None, full: bool = False) -> None:
     """Fetch one file (no transaction open), then write it in its own
     transaction, written again once after a deadlock.
 
@@ -786,13 +821,13 @@ def _process_file(source, provider, candidate: Candidate, head: str, tally: Sync
 
         _end_transaction()
         with import_slot():
-            _fetch_and_write(source, provider, candidate, head, tally, member_id)
+            _fetch_and_write(source, provider, candidate, head, tally, member_id, full)
         return
-    _fetch_and_write(source, provider, candidate, head, tally, member_id)
+    _fetch_and_write(source, provider, candidate, head, tally, member_id, full)
 
 
 def _fetch_and_write(source, provider, candidate: Candidate, head: str, tally: SyncTally,
-                     member_id: str | None) -> None:
+                     member_id: str | None, full: bool = False) -> None:
     from app.services.evidence_import import is_deadlock
 
     _end_transaction()
@@ -805,6 +840,10 @@ def _fetch_and_write(source, provider, candidate: Candidate, head: str, tally: S
         logger.exception("Git source %s: failed to read %s", source.name, candidate.path)
         _record_file_error(source, candidate, head, f"{type(exc).__name__}: {exc}", tally)
         return
+
+    if (not full and fetched.content is not None and fetched.too_large is None
+            and candidate.kind.startswith("dataset:") and candidate.change_type != "D"):
+        fetched.previous = _previous_content(source, provider, candidate)
 
     for attempt in (1, 2):
         before = tally.snapshot()

@@ -1286,3 +1286,177 @@ def test_import_refuses_invalid_and_repeated_policy_slugs(app):
     assert "already used by policy p-ok" in joined
     assert "must be lowercase" in joined
     assert "uuid" in joined
+
+
+# --------------------------------------------------------------------------
+# Three-way merge of a changed tests file
+# --------------------------------------------------------------------------
+
+def _merge_tests(**changes):
+    """TESTS with a third test, and ``changes`` applied to test t3."""
+    third = {"id": "t3", "control_id": "c1", "name": "Third test", "status": "not_run",
+             "evidence_status": "missing"}
+    return [dict(item) for item in TESTS] + [dict(third, **changes)]
+
+
+@pytest.fixture
+def merged_base(app):
+    """Controls, systems and the three tests imported from the file's first version."""
+    import_dataset_file("controls", "controls.json", CONTROLS)
+    import_dataset_file("systems", "systems.json", SYSTEMS)
+    first = _merge_tests()
+    import_dataset_file("tests", "tests.json", first)
+    db.session.commit()
+    return first
+
+
+def _record_result(test_id, outcome="failure", via="api"):
+    from app.services.test_execution import apply_outcome
+
+    test = db.session.get(TestRecord, test_id)
+    apply_outcome(test, outcome, finding=f"{via} finding", comment=f"{via} comment",
+                  evidence_submitted=True)
+    db.session.commit()
+
+
+def test_loader_opt_in_is_limited_to_tests():
+    assert evidence_import.merges_changes("tests") is True
+    assert evidence_import.merges_changes("controls") is False
+
+
+def test_api_result_survives_an_import_that_changed_another_test(merged_base):
+    _record_result("t1", "failure", via="api")
+    second = _merge_tests(name="Third test, renamed", status="success")
+
+    counts = import_dataset_file("tests", "tests.json", second, previous=merged_base)
+    db.session.commit()
+
+    kept = db.session.get(TestRecord, "t1")
+    assert (kept.status, kept.execution_outcome, kept.execution_status) == ("failed", "failure", "completed")
+    assert (kept.finding, kept.comment, kept.evidence_status) == ("api finding", "api comment", "submitted")
+    changed = db.session.get(TestRecord, "t3")
+    assert (changed.name, changed.status) == ("Third test, renamed", "passed")
+    assert (counts.created, counts.updated, counts.unchanged) == (0, 1, 2)
+
+
+def test_two_way_import_reverts_the_same_result_without_a_previous_version(merged_base):
+    _record_result("t1", "failure", via="api")
+    import_dataset_file("tests", "tests.json", merged_base)
+    db.session.commit()
+    assert db.session.get(TestRecord, "t1").status == "passed"
+
+
+def test_collector_result_survives(merged_base):
+    _record_result("t2", "success", via="collector")
+    second = _merge_tests(name="Renamed")
+
+    import_dataset_file("tests", "tests.json", second, previous=json.dumps(merged_base))
+    db.session.commit()
+
+    kept = db.session.get(TestRecord, "t2")
+    assert (kept.status, kept.finding, kept.execution_outcome) == ("passed", "collector finding", "success")
+    assert kept.evidence_status == "submitted"
+
+
+def test_only_the_columns_changed_in_the_file_are_written(merged_base):
+    _record_result("t3", "failure", via="api")
+    second = _merge_tests(name="Third test, renamed")
+    with count_writes() as (writes, statements):
+        counts = import_dataset_file("tests", "tests.json", second, previous=merged_base)
+        db.session.flush()
+
+    assert (counts.updated, counts.unchanged) == (1, 2)
+    assert writes["UPDATE"] == 1 and writes["INSERT"] == 0
+    update = statements[0].split(" WHERE ")[0]
+    assert "name=" in update
+    for column in ("status=", "evidence_status=", "finding=", "comment=", "execution_outcome="):
+        assert column not in update
+    stored = db.session.get(TestRecord, "t3")
+    assert (stored.name, stored.status, stored.finding) == ("Third test, renamed", "failed", "api finding")
+
+
+def test_file_change_to_a_column_overwrites_a_recorded_value(merged_base):
+    _record_result("t3", "failure", via="api")
+    second = _merge_tests(status="success")
+
+    import_dataset_file("tests", "tests.json", second, previous=merged_base)
+
+    assert db.session.get(TestRecord, "t3").status == "passed"
+    assert db.session.get(TestRecord, "t3").finding == "api finding"
+
+
+def test_values_with_the_same_meaning_are_not_a_change(merged_base):
+    second = _merge_tests()
+    second[0]["status"] = "passed"  # the database vocabulary for "success"
+    _record_result("t1", "failure", via="api")
+
+    counts = import_dataset_file("tests", "tests.json", second, previous=merged_base)
+
+    assert (counts.updated, counts.unchanged) == (0, 3)
+    assert db.session.get(TestRecord, "t1").status == "failed"
+
+
+def test_unchanged_file_writes_nothing(merged_base):
+    with count_writes() as (writes, _):
+        counts = import_dataset_file("tests", "tests.json", merged_base, previous=merged_base)
+        db.session.flush()
+    assert sum(writes.values()) == 0
+    assert (counts.created, counts.updated, counts.unchanged) == (0, 0, 3)
+
+
+def test_new_record_is_imported_in_full(merged_base):
+    fourth = {"id": "t4", "control_id": "c2", "name": "Fourth", "status": "failure",
+              "evidence_status": "outdated", "system": {"id": "s2", "name": "S3"}}
+
+    counts = import_dataset_file("tests", "tests.json", merged_base + [fourth], previous=merged_base)
+
+    created = db.session.get(TestRecord, "t4")
+    assert (created.name, created.status, created.evidence_status, created.system_id) == (
+        "Fourth", "failed", "outdated", "s2")
+    assert (counts.created, counts.unchanged) == (1, 3)
+
+
+def test_record_in_both_versions_but_not_stored_is_imported_in_full(merged_base):
+    db.session.delete(db.session.get(TestRecord, "t2"))
+    db.session.commit()
+
+    counts = import_dataset_file("tests", "tests.json", merged_base, previous=merged_base)
+
+    assert counts.created == 1
+    assert db.session.get(TestRecord, "t2").name == "Backup test"
+
+
+def test_removed_record_is_kept(merged_base):
+    counts = import_dataset_file("tests", "tests.json", merged_base[:2], previous=merged_base)
+    assert (counts.deleted, counts.unchanged) == (0, 2)
+    assert db.session.get(TestRecord, "t3") is not None
+
+
+@pytest.mark.parametrize("previous", [b"not json", b"\xff\xfe", "{}", {"a": 1}, []])
+def test_unusable_previous_version_compares_every_column(merged_base, previous):
+    _record_result("t1", "failure", via="api")
+    import_dataset_file("tests", "tests.json", merged_base, previous=previous)
+    db.session.commit()
+    assert db.session.get(TestRecord, "t1").status == "passed"
+
+
+def test_first_import_behaves_as_before(app):
+    import_dataset_file("controls", "controls.json", CONTROLS)
+    import_dataset_file("systems", "systems.json", SYSTEMS)
+    counts = import_dataset_file("tests", "tests.json", TESTS)
+    assert counts.created == 2
+    again = import_dataset_file("tests", "tests.json", TESTS)
+    assert (again.created, again.updated, again.unchanged) == (0, 0, 2)
+
+
+def test_other_datasets_ignore_a_previous_version(app):
+    import_dataset_file("controls", "controls.json", CONTROLS)
+    db.session.commit()
+    stored = db.session.get(Control, "c2")
+    stored.name = "Edited through the API"
+    db.session.commit()
+
+    import_dataset_file("controls", "controls.json", CONTROLS, previous=CONTROLS)
+    db.session.commit()
+
+    assert db.session.get(Control, "c2").name == "Backups"
