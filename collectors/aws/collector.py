@@ -25,10 +25,12 @@ AWS_REQUIRED_PERMISSIONS = [
     "iam:ListVirtualMFADevices",
     "iam:ListAccessKeys",
     "iam:GetAccountPasswordPolicy",
+    "iam:GetLoginProfile",
     # S3
     "s3:ListAllMyBuckets",
     "s3:GetEncryptionConfiguration",
     "s3:GetBucketVersioning",
+    "s3:GetBucketTagging",
     "s3:GetBucketPublicAccessBlock",
     # RDS
     "rds:DescribeDBInstances",

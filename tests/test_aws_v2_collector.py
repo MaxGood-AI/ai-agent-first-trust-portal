@@ -160,6 +160,10 @@ def test_aws_collector_runs_against_moto(app_ctx):
         Bucket="test-bucket-1",
         VersioningConfiguration={"Status": "Enabled"},
     )
+    s3.put_bucket_tagging(
+        Bucket="test-bucket-1",
+        Tagging={"TagSet": [{"Key": "trust-portal:backup", "Value": "versioning"}]},
+    )
     s3.put_public_access_block(
         Bucket="test-bucket-1",
         PublicAccessBlockConfiguration={

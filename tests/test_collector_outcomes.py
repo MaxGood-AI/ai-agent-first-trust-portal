@@ -152,13 +152,40 @@ def test_shared_name_resolves_to_the_auto_assessment_record(app_ctx):
     assert auto_high.id > "00000000-0000-0000-0000-000000000005"
 
 
-def test_shared_name_with_self_assessment_only_still_resolves(app_ctx):
-    low = _test("Multi-factor authentication enabled for all users", test_type="self_assessment",
-                record_id="00000000-0000-0000-0000-000000000001")
-    _test("Multi-factor authentication enabled for all users", test_type="self_assessment",
-          record_id="00000000-0000-0000-0000-000000000002")
+def test_name_shared_by_several_self_assessments_is_ambiguous(app_ctx):
+    name = "Multi-factor authentication enabled for all users"
+    _test(name, test_type="self_assessment", record_id="00000000-0000-0000-0000-000000000001")
+    _test(name, test_type="self_assessment", record_id="00000000-0000-0000-0000-000000000002")
 
-    assert _resolve_test_record("Multi-factor authentication enabled for all users").id == low.id
+    assert _resolve_test_record(name) is None
+    assert _resolve_test_record(name.upper()) is None
+
+
+def test_name_held_by_one_self_assessment_resolves(app_ctx):
+    name = "Multi-factor authentication enabled for all users"
+    only = _test(name, test_type="self_assessment")
+
+    assert _resolve_test_record(name).id == only.id
+    assert _resolve_test_record(name.upper()).id == only.id
+
+
+def test_auto_assessment_wins_among_several_self_assessments(app_ctx):
+    name = "Multi-factor authentication enabled for all users"
+    _test(name, test_type="self_assessment", record_id="00000000-0000-0000-0000-000000000001")
+    auto = _test(name, record_id="00000000-0000-0000-0000-000000000009")
+    _test(name, test_type="self_assessment", record_id="00000000-0000-0000-0000-000000000002")
+
+    assert _resolve_test_record(name).id == auto.id
+    assert _resolve_test_record(name.upper()).id == auto.id
+
+
+def test_ambiguous_name_creates_no_evidence(app_ctx, monkeypatch):
+    name = "Multi-factor authentication enabled for all users"
+    first = _test(name, test_type="self_assessment")
+    second = _test(name, test_type="self_assessment")
+    _run_with(monkeypatch, [_check("a", "fail", name)])
+
+    assert Evidence.query.filter(Evidence.test_record_id.in_([first.id, second.id])).count() == 0
 
 
 def test_outcome_lands_on_auto_record_when_names_collide(app_ctx, monkeypatch):

@@ -102,6 +102,18 @@ def _probe_iam_get_account_password_policy(session: Any) -> None:
         pass
 
 
+def _probe_iam_get_login_profile(session: Any) -> None:
+    iam = session.client("iam")
+    users = iam.list_users(MaxItems=1).get("Users", [])
+    if not users:
+        return
+    try:
+        iam.get_login_profile(UserName=users[0]["UserName"])
+    except iam.exceptions.NoSuchEntityException:
+        # A user without a console password is fine: the call itself is authorized.
+        pass
+
+
 def _probe_s3_list_all_my_buckets(session: Any) -> None:
     session.client("s3").list_buckets()
 
@@ -112,6 +124,10 @@ def _probe_s3_get_bucket_encryption(session: Any) -> None:
 
 def _probe_s3_get_bucket_versioning(session: Any) -> None:
     _probe_s3_bucket_attr(session, "get_bucket_versioning")
+
+
+def _probe_s3_get_bucket_tagging(session: Any) -> None:
+    _probe_s3_bucket_attr(session, "get_bucket_tagging")
 
 
 def _probe_s3_get_bucket_public_access_block(session: Any) -> None:
@@ -133,6 +149,7 @@ def _probe_s3_bucket_attr(session: Any, method_name: str) -> None:
         allowed = {
             "ServerSideEncryptionConfigurationNotFoundError",
             "NoSuchPublicAccessBlockConfiguration",
+            "NoSuchTagSet",
         }
         if code in allowed:
             return
@@ -228,10 +245,12 @@ AWS_ACTION_PROBES: dict[str, Callable[..., None]] = {
     "iam:ListVirtualMFADevices": _probe_iam_list_virtual_mfa_devices,
     "iam:ListAccessKeys": _probe_iam_list_access_keys,
     "iam:GetAccountPasswordPolicy": _probe_iam_get_account_password_policy,
+    "iam:GetLoginProfile": _probe_iam_get_login_profile,
     "s3:ListAllMyBuckets": _probe_s3_list_all_my_buckets,
     # The IAM action behind the GetBucketEncryption API is s3:GetEncryptionConfiguration.
     "s3:GetEncryptionConfiguration": _probe_s3_get_bucket_encryption,
     "s3:GetBucketVersioning": _probe_s3_get_bucket_versioning,
+    "s3:GetBucketTagging": _probe_s3_get_bucket_tagging,
     "s3:GetBucketPublicAccessBlock": _probe_s3_get_bucket_public_access_block,
     "rds:DescribeDBInstances": _probe_rds_describe_db_instances,
     "cloudtrail:DescribeTrails": _probe_cloudtrail_describe_trails,

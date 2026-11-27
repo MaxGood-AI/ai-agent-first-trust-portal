@@ -64,28 +64,39 @@ def _resolve_test_record(target_test_name: str | None) -> TestRecord | None:
 
     An exact name match wins. Otherwise the name matches ignoring case and
     surrounding spaces, so a check naming "Policy Management" links to a test
-    record named "Policy management ". Among several matches of the same kind
-    an ``auto_assessment`` record is preferred, then the lowest id, so the
-    link is deterministic and a collector's result lands on the automated test
-    rather than on a self-assessment record that shares its name.
+    record named "Policy management ". Within a match, the lowest-id
+    ``auto_assessment`` record wins, so a collector's result lands on the
+    automated test rather than on a self-assessment record that shares its
+    name. With no ``auto_assessment`` record, the match counts only when exactly
+    one record carries the name; when several do, the name is ambiguous and
+    the result is returned unlinked (None), so it is recorded on the run and
+    creates no evidence on an unrelated test.
     """
     if not target_test_name:
         return None
-    exact = (TestRecord.query.filter_by(name=target_test_name)
-             .order_by(_auto_assessment_first(), TestRecord.id).first())
-    if exact is not None:
-        return exact
+    exact = TestRecord.query.filter_by(name=target_test_name)
     wanted = target_test_name.strip().lower()
-    if not wanted:
-        return None
-    return (TestRecord.query
-            .filter(db.func.lower(db.func.trim(TestRecord.name)) == wanted)
-            .order_by(_auto_assessment_first(), TestRecord.id).first())
+    relaxed = TestRecord.query.filter(
+        db.func.lower(db.func.trim(TestRecord.name)) == wanted)
+    for query in (exact, relaxed if wanted else None):
+        if query is None:
+            continue
+        record = _unambiguous_record(query)
+        if record is not None:
+            return record
+        if query.count():
+            return None
+    return None
 
 
-def _auto_assessment_first():
-    """ORDER BY term that sorts ``auto_assessment`` records before the others."""
-    return db.case((TestRecord.test_type == "auto_assessment", 0), else_=1)
+def _unambiguous_record(query) -> TestRecord | None:
+    """The lowest-id auto_assessment record of a match, else its only record."""
+    auto = (query.filter(TestRecord.test_type == "auto_assessment")
+            .order_by(TestRecord.id).first())
+    if auto is not None:
+        return auto
+    records = query.order_by(TestRecord.id).limit(2).all()
+    return records[0] if len(records) == 1 else None
 
 
 class _TestTally:

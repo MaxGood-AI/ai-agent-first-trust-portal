@@ -77,8 +77,29 @@ def check_s3_encryption(session: Any) -> list[CheckResult]:
         ]
 
 
+BACKUP_TAG_KEY = "trust-portal:backup"
+BACKUP_TAG_VALUE = "versioning"
+_VERSIONING_TEST = "S3 versioning"
+
+
+def _is_backup_bucket(s3: Any, name: str) -> bool:
+    """True when the bucket carries the tag that marks it as protected by versioning."""
+    try:
+        tags = s3.get_bucket_tagging(Bucket=name).get("TagSet", [])
+    except Exception as exc:  # noqa: BLE001
+        if getattr(exc, "response", {}).get("Error", {}).get("Code", "") == "NoSuchTagSet":
+            return False
+        raise
+    return any(t.get("Key") == BACKUP_TAG_KEY and t.get("Value") == BACKUP_TAG_VALUE
+               for t in tags)
+
+
 def check_s3_versioning(session: Any) -> list[CheckResult]:
-    """Verify S3 bucket versioning is enabled."""
+    """Verify versioning is enabled on every bucket tagged ``trust-portal:backup=versioning``.
+
+    The tag marks the buckets the backup policy protects through version
+    history; other buckets (logs, build artifacts) are not checked.
+    """
     try:
         s3 = session.client("s3")
         buckets = s3.list_buckets().get("Buckets", [])
@@ -86,6 +107,8 @@ def check_s3_versioning(session: Any) -> list[CheckResult]:
         for bucket in buckets:
             name = bucket["Name"]
             try:
+                if not _is_backup_bucket(s3, name):
+                    continue
                 v = s3.get_bucket_versioning(Bucket=name)
                 status = v.get("Status", "Disabled") or "Disabled"
                 passed = status == "Enabled"
@@ -93,7 +116,7 @@ def check_s3_versioning(session: Any) -> list[CheckResult]:
                     CheckResult(
                         check_name=f"s3_versioning:{name}",
                         status="pass" if passed else "fail",
-                        target_test_name="S3 versioning",
+                        target_test_name=_VERSIONING_TEST,
                         message=f"Bucket {name}: versioning {status}",
                         detail={"bucket": name, "versioning": status},
                         evidence_description=f"S3 bucket {name} versioning: {status}",
@@ -104,7 +127,7 @@ def check_s3_versioning(session: Any) -> list[CheckResult]:
                     CheckResult(
                         check_name=f"s3_versioning:{name}",
                         status="error",
-                        target_test_name="S3 versioning",
+                        target_test_name=_VERSIONING_TEST,
                         message=f"Error on {name}: {exc}",
                     )
                 )
@@ -112,9 +135,13 @@ def check_s3_versioning(session: Any) -> list[CheckResult]:
             results.append(
                 CheckResult(
                     check_name="s3_versioning",
-                    status="pass",
-                    target_test_name="S3 versioning",
-                    message="No S3 buckets in account",
+                    status="fail",
+                    target_test_name=_VERSIONING_TEST,
+                    message=(
+                        f"No S3 bucket carries the tag {BACKUP_TAG_KEY}={BACKUP_TAG_VALUE}, "
+                        "which marks the buckets the backup policy protects through "
+                        "version history"
+                    ),
                 )
             )
         return results
@@ -124,7 +151,7 @@ def check_s3_versioning(session: Any) -> list[CheckResult]:
             CheckResult(
                 check_name="s3_versioning",
                 status="error",
-                target_test_name="S3 versioning",
+                target_test_name=_VERSIONING_TEST,
                 message=str(exc),
             )
         ]

@@ -408,9 +408,9 @@ Resources:
             Statement:
               # BEGIN iam/trust-portal-collector-policy.json
               - {"Sid": "TrustPortalCollectorSTS", "Effect": "Allow", "Action": ["sts:GetCallerIdentity"], "Resource": "*"}
-              - {"Sid": "TrustPortalCollectorIAMReadOnly", "Effect": "Allow", "Action": ["iam:ListUsers", "iam:ListAccessKeys", "iam:ListMFADevices", "iam:ListVirtualMFADevices", "iam:GetAccountPasswordPolicy"], "Resource": "*"}
+              - {"Sid": "TrustPortalCollectorIAMReadOnly", "Effect": "Allow", "Action": ["iam:ListUsers", "iam:ListAccessKeys", "iam:ListMFADevices", "iam:ListVirtualMFADevices", "iam:GetAccountPasswordPolicy", "iam:GetLoginProfile"], "Resource": "*"}
               - {"Sid": "TrustPortalCollectorRDSReadOnly", "Effect": "Allow", "Action": ["rds:DescribeDBInstances"], "Resource": "*"}
-              - {"Sid": "TrustPortalCollectorS3ReadOnly", "Effect": "Allow", "Action": ["s3:ListAllMyBuckets", "s3:GetEncryptionConfiguration", "s3:GetBucketVersioning", "s3:GetBucketPublicAccessBlock"], "Resource": "*"}
+              - {"Sid": "TrustPortalCollectorS3ReadOnly", "Effect": "Allow", "Action": ["s3:ListAllMyBuckets", "s3:GetEncryptionConfiguration", "s3:GetBucketVersioning", "s3:GetBucketTagging", "s3:GetBucketPublicAccessBlock"], "Resource": "*"}
               - {"Sid": "TrustPortalCollectorCloudTrailReadOnly", "Effect": "Allow", "Action": ["cloudtrail:DescribeTrails", "cloudtrail:GetTrailStatus"], "Resource": "*"}
               - {"Sid": "TrustPortalCollectorCodeCommitList", "Effect": "Allow", "Action": ["codecommit:ListRepositories"], "Resource": "*"}
               # END iam/trust-portal-collector-policy.json

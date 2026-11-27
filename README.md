@@ -373,7 +373,7 @@ The store imports a pentest file only into its own namespace and never changes t
 
 | Collector | Evidence |
 |---|---|
-| `aws` | IAM (MFA, password policy, access keys), RDS, S3 and CloudTrail configuration |
+| `aws` | IAM (MFA of every user with a console password, password policy, access keys), RDS, S3 and CloudTrail configuration. The S3 versioning check covers the buckets tagged `trust-portal:backup=versioning`, the buckets the backup policy protects through version history; tag a bucket with that key and value to bring it under the check, and a bucket without the tag needs no versioning. With no tagged bucket the check fails. The collector reads the tag with `s3:GetBucketTagging` and console passwords with `iam:GetLoginProfile`. |
 | `git` | CodeCommit repository inventory and the structured change record of every default-branch commit |
 | `platform` | Health endpoints of the services you list |
 | `policy` | Policy approval and review dates |

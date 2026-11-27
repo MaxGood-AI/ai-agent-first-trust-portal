@@ -1134,10 +1134,20 @@ def test_resolve_test_record_ignores_case_and_surrounding_spaces(app_ctx):
 
 
 def test_resolve_test_record_relaxed_match_is_deterministic(app_ctx):
-    _make_test_record("backup ENABLED", record_id="00000000-0000-0000-0000-00000000000b")
-    lowest = _make_test_record("Backup enabled ", record_id="00000000-0000-0000-0000-00000000000a")
+    for record_id, test_type in (("00000000-0000-0000-0000-00000000000b", "auto_assessment"),
+                                 ("00000000-0000-0000-0000-00000000000a", "auto_assessment")):
+        record = _make_test_record("Backup enabled ", record_id=record_id)
+        record.test_type = test_type
+    db.session.commit()
 
-    assert _resolve_test_record("Backup Enabled").id == lowest.id
+    assert _resolve_test_record("Backup Enabled").id == "00000000-0000-0000-0000-00000000000a"
+
+
+def test_resolve_test_record_relaxed_match_of_several_plain_records_is_ambiguous(app_ctx):
+    _make_test_record("backup ENABLED", record_id="00000000-0000-0000-0000-00000000000b")
+    _make_test_record("Backup enabled ", record_id="00000000-0000-0000-0000-00000000000a")
+
+    assert _resolve_test_record("Backup Enabled") is None
 
 
 @pytest.mark.parametrize("target", [None, "", "   ", "Policy", "Policy  Management"])

@@ -13,21 +13,51 @@ from collectors.base import CheckResult
 logger = logging.getLogger(__name__)
 
 
+_MFA_TEST = "Multi-factor authentication enabled for all users"
+
+
+def _has_console_password(iam: Any, username: str) -> bool:
+    """True when the IAM user has a console password (a login profile)."""
+    try:
+        iam.get_login_profile(UserName=username)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        if getattr(exc, "response", {}).get("Error", {}).get("Code", "") == "NoSuchEntity":
+            return False
+        raise
+
+
 def check_iam_mfa(session: Any) -> list[CheckResult]:
-    """Verify MFA is enabled for every IAM user."""
+    """Verify MFA is enabled for every IAM user that has a console password.
+
+    Users with only access keys sign in to nothing and produce no result.
+    """
     try:
         iam = session.client("iam")
         users = iam.list_users().get("Users", [])
         results: list[CheckResult] = []
         for user in users:
             username = user["UserName"]
-            devices = iam.list_mfa_devices(UserName=username).get("MFADevices", [])
+            try:
+                if not _has_console_password(iam, username):
+                    continue
+                devices = iam.list_mfa_devices(UserName=username).get("MFADevices", [])
+            except Exception as exc:  # noqa: BLE001
+                results.append(
+                    CheckResult(
+                        check_name=f"iam_mfa:{username}",
+                        status="error",
+                        target_test_name=_MFA_TEST,
+                        message=f"Error on IAM user {username}: {exc}",
+                    )
+                )
+                continue
             enabled = len(devices) > 0
             results.append(
                 CheckResult(
                     check_name=f"iam_mfa:{username}",
                     status="pass" if enabled else "fail",
-                    target_test_name="Multi-factor authentication enabled for all users",
+                    target_test_name=_MFA_TEST,
                     message=(
                         f"IAM user {username}: MFA {'enabled' if enabled else 'NOT enabled'}"
                     ),
@@ -39,15 +69,17 @@ def check_iam_mfa(session: Any) -> list[CheckResult]:
                 )
             )
         if not results:
-            # No users — record a neutral pass so auditors see the check ran.
+            # No console users: record a neutral pass so auditors see the check ran.
             results.append(
                 CheckResult(
                     check_name="iam_mfa",
                     status="pass",
-                    target_test_name="Multi-factor authentication enabled for all users",
-                    message="No IAM users present",
-                    detail={"user_count": 0},
-                    evidence_description="No IAM users in account; MFA check vacuously passes",
+                    target_test_name=_MFA_TEST,
+                    message="No IAM users with a console password",
+                    detail={"console_user_count": 0},
+                    evidence_description=(
+                        "No IAM user has a console password; MFA check vacuously passes"
+                    ),
                 )
             )
         return results
@@ -57,7 +89,7 @@ def check_iam_mfa(session: Any) -> list[CheckResult]:
             CheckResult(
                 check_name="iam_mfa",
                 status="error",
-                target_test_name="Multi-factor authentication enabled for all users",
+                target_test_name=_MFA_TEST,
                 message=str(exc),
             )
         ]

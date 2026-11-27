@@ -17,7 +17,8 @@
         "iam:ListAccessKeys",
         "iam:ListMFADevices",
         "iam:ListVirtualMFADevices",
-        "iam:GetAccountPasswordPolicy"
+        "iam:GetAccountPasswordPolicy",
+        "iam:GetLoginProfile"
       ],
       "Resource": "*"
     },
@@ -36,6 +37,7 @@
         "s3:ListAllMyBuckets",
         "s3:GetEncryptionConfiguration",
         "s3:GetBucketVersioning",
+        "s3:GetBucketTagging",
         "s3:GetBucketPublicAccessBlock"
       ],
       "Resource": "*"
