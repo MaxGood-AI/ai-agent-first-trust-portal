@@ -608,6 +608,37 @@ def test_vendor_probe_refuses_internal_urls(dns):
         assert get.call_args.kwargs["allow_redirects"] is False
 
 
+@pytest.mark.parametrize("status,headers,reachable,challenge,text", [
+    (200, {}, True, False, "reachable (HTTP 200)"),
+    (403, {"cf-mitigated": "challenge"}, True, True, "reachable (bot challenge, HTTP 403)"),
+    (503, {"cf-mitigated": "challenge"}, True, True, "reachable (bot challenge, HTTP 503)"),
+    (403, {"CF-Mitigated": "CHALLENGE"}, True, True, "reachable (bot challenge, HTTP 403)"),
+    (403, {}, False, False, "unreachable (HTTP 403, no bot challenge marker)"),
+    (403, {"cf-mitigated": "block"}, False, False, "unreachable (HTTP 403, no bot challenge marker)"),
+    (404, {"cf-mitigated": "challenge"}, False, False, "unreachable (HTTP 404)"),
+    (500, {}, False, False, "unreachable (HTTP 500)"),
+])
+def test_vendor_probe_bot_challenge(dns, status, headers, reachable, challenge, text):
+    from collectors.vendor_check_collector import _describe_probe, _probe_url
+
+    with mock.patch("requests.Session.get", return_value=_response(status, headers)):
+        result = _probe_url("https://public.example/security", timeout=3)
+    assert result["reachable"] is reachable
+    assert result["bot_challenge"] is challenge
+    assert result["status_code"] == status
+    assert _describe_probe(result) == text
+
+
+def test_vendor_probe_exception_is_unreachable(dns):
+    from collectors.vendor_check_collector import _describe_probe, _probe_url
+
+    with mock.patch("requests.Session.get", side_effect=requests.ConnectionError("boom")):
+        result = _probe_url("https://public.example/security", timeout=3)
+    assert result["reachable"] is False and result["bot_challenge"] is False
+    assert result["status_code"] is None
+    assert _describe_probe(result).startswith("unreachable (")
+
+
 def _platform(services):
     from collectors.platform_collector import PlatformCollector
 
