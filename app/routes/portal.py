@@ -15,6 +15,7 @@ from flask import Blueprint, render_template, abort, redirect
 
 from app.models import db, Control, System, Vendor, Policy, TestRecord, RiskRegister
 from app.security import is_http_url, render_markdown
+from app.services import compliance_engine
 
 logger = logging.getLogger(__name__)
 
@@ -42,25 +43,16 @@ def index():
     controls = Control.query.all()
     policies = Policy.query.filter_by(status="approved").all()
 
-    total_tests = TestRecord.query.count()
-    passed_tests = TestRecord.query.filter_by(status="passed").count()
-    compliance_score = (passed_tests / total_tests * 100) if total_tests > 0 else 0
+    compliance_score = compliance_engine.calculate_overall_score()
 
     categories = {}
-    for category in ["security", "availability", "confidentiality", "privacy", "processing_integrity"]:
-        cat_controls = Control.query.filter_by(category=category).all()
-        cat_control_ids = [c.id for c in cat_controls]
-        cat_total = (TestRecord.query.filter(TestRecord.control_id.in_(cat_control_ids)).count()
-                     if cat_control_ids else 0)
-        cat_passed = TestRecord.query.filter(
-            TestRecord.control_id.in_(cat_control_ids),
-            TestRecord.status == "passed"
-        ).count() if cat_control_ids else 0
+    for category in compliance_engine.TSC_CATEGORIES:
+        control_count, cat_passed, cat_total = compliance_engine.category_counts(category)
         categories[category] = {
-            "controls": len(cat_controls),
+            "controls": control_count,
             "total_tests": cat_total,
             "passed_tests": cat_passed,
-            "score": (cat_passed / cat_total * 100) if cat_total > 0 else 0,
+            "score": compliance_engine.percentage(cat_passed, cat_total),
         }
 
     return render_template(
@@ -129,7 +121,7 @@ def status():
     from app.services.settings_service import section_enabled
 
     categories = {}
-    for category in ["security", "availability", "confidentiality", "privacy", "processing_integrity"]:
+    for category in compliance_engine.TSC_CATEGORIES:
         cat_controls = Control.query.filter_by(category=category).all()
         control_data = []
         for control in cat_controls:
@@ -138,7 +130,7 @@ def status():
                 "control": control,
                 "tests": tests,
                 "passed": sum(1 for t in tests if t.status == "passed"),
-                "total": len(tests),
+                "total": len(compliance_engine.applicable_tests(tests)),
             })
         categories[category] = control_data
     return render_template("portal/status.html", categories=categories,

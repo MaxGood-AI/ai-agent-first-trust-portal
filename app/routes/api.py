@@ -13,6 +13,7 @@ from app.models import (
 )
 from app.auth import require_admin, require_api_key, require_team, require_writer
 from app.services.audit_chain import AuditChainError, redact_values, verify_chain
+from app.services.test_execution import apply_outcome
 
 logger = logging.getLogger(__name__)
 
@@ -133,9 +134,14 @@ def compliance_score():
                 total_tests:
                   type: integer
                   example: 100
+                  description: Applicable tests (every test except those with status not_applicable)
                 passed_tests:
                   type: integer
                   example: 75
+                not_applicable_tests:
+                  type: integer
+                  example: 3
+                  description: Tests excluded from every score
                 categories:
                   type: object
                   additionalProperties:
@@ -150,32 +156,24 @@ def compliance_score():
       401:
         description: Missing or invalid API key
     """
-    total_tests = TestRecord.query.count()
-    passed_tests = TestRecord.query.filter_by(status="passed").count()
-    overall = (passed_tests / total_tests * 100) if total_tests > 0 else 0
+    from app.services import compliance_engine
+
+    passed_tests, total_tests = compliance_engine.score_counts()
 
     categories = {}
-    for category in ["security", "availability", "confidentiality", "privacy", "processing_integrity"]:
-        controls = Control.query.filter_by(category=category).all()
-        control_ids = [c.id for c in controls]
-        if control_ids:
-            cat_total = TestRecord.query.filter(TestRecord.control_id.in_(control_ids)).count()
-            cat_passed = TestRecord.query.filter(
-                TestRecord.control_id.in_(control_ids),
-                TestRecord.status == "passed"
-            ).count()
-        else:
-            cat_total = cat_passed = 0
+    for category in compliance_engine.TSC_CATEGORIES:
+        _, cat_passed, cat_total = compliance_engine.category_counts(category)
         categories[category] = {
             "total_tests": cat_total,
             "passed_tests": cat_passed,
-            "score": round((cat_passed / cat_total * 100), 1) if cat_total > 0 else 0,
+            "score": compliance_engine.percentage(cat_passed, cat_total),
         }
 
     return jsonify({
-        "overall_score": round(overall, 1),
+        "overall_score": compliance_engine.percentage(passed_tests, total_tests),
         "total_tests": total_tests,
         "passed_tests": passed_tests,
+        "not_applicable_tests": TestRecord.query.filter_by(status="not_applicable").count(),
         "categories": categories,
     })
 
@@ -211,7 +209,9 @@ def compliance_journey():
     total_evidence = Evidence.query.count()
     total_decision_log_sessions = DecisionLogSession.query.count()
 
-    passed_tests = TestRecord.query.filter_by(status="passed").count()
+    from app.services import compliance_engine
+
+    passed_tests, applicable_tests = compliance_engine.score_counts()
     approved_policies = Policy.query.filter_by(status="approved").count()
 
     tests_missing_evidence = TestRecord.query.filter_by(evidence_status="missing").count()
@@ -238,7 +238,7 @@ def compliance_journey():
     controls_without_tests = total_controls - len(controls_with_tests)
 
     # Compliance score
-    overall_score = round((passed_tests / total_tests * 100), 1) if total_tests > 0 else 0.0
+    overall_score = compliance_engine.percentage(passed_tests, applicable_tests)
 
     # Audit log check (lightweight — just check latest entry has hash)
     latest_audit = AuditLog.query.order_by(AuditLog.id.desc()).first()
@@ -337,16 +337,7 @@ def compliance_journey():
     # Phase 6: Gap Analysis
     category_scores = {}
     for cat in TSC_CATEGORIES:
-        cat_controls = Control.query.filter_by(category=cat).all()
-        cat_ids = [c.id for c in cat_controls]
-        if cat_ids:
-            cat_total = TestRecord.query.filter(TestRecord.control_id.in_(cat_ids)).count()
-            cat_passed = TestRecord.query.filter(
-                TestRecord.control_id.in_(cat_ids), TestRecord.status == "passed"
-            ).count()
-            category_scores[cat] = round((cat_passed / cat_total * 100), 1) if cat_total > 0 else 0.0
-        else:
-            category_scores[cat] = 0.0
+        category_scores[cat] = compliance_engine.calculate_category_score(cat)
 
     p6_checks = {
         "compliance_score": overall_score,
@@ -1576,10 +1567,7 @@ def _apply_execution(test, data):
     if outcome not in ("success", "failure"):
         return "outcome must be 'success' or 'failure'"
 
-    test.execution_status = "completed"
-    test.execution_outcome = outcome
-    test.status = "passed" if outcome == "success" else "failed"
-    test.last_executed_at = datetime.now(timezone.utc)
+    apply_outcome(test, outcome)
 
     if "finding" in data:
         test.finding = data["finding"]

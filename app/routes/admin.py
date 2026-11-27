@@ -613,6 +613,7 @@ def client_login():
 @require_client_or_admin
 def client_report():
     """Comprehensive read-only compliance report for client reviewers."""
+    from app.services import compliance_engine
     from app.services.compliance_engine import get_compliance_summary
     from app.services.settings_service import get_portal_settings
     from app.models import (
@@ -632,7 +633,7 @@ def client_report():
             control_data.append({
                 "control": ctrl,
                 "passed": sum(1 for t in tests if t.status == "passed"),
-                "total": len(tests),
+                "total": len(compliance_engine.applicable_tests(tests)),
             })
         categories[category] = control_data
 

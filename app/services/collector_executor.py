@@ -12,7 +12,14 @@ The executor owns the lifecycle of a claimed ``CollectorRun`` (status
 5. For each CheckResult, create a ``CollectorCheckResult`` row and (for
    pass/fail checks with an evidence description and a matching test) an
    ``Evidence`` row, committing each check on its own.
-6. Record ``success``, ``partial`` or ``failure`` with the counts
+6. For each ``auto_assessment`` test the run's checks named, decide the test's
+   result: any failing check records ``failure``; at least one passing check
+   and no failing one records ``success``; a test only error/skipped checks
+   reached is left as it is. The result goes through
+   ``test_execution.apply_outcome``, the code path of the API's
+   ``record-execution``. A ``self_assessment`` test named by a check receives
+   the evidence link but never a result.
+7. Record ``success``, ``partial`` or ``failure`` with the counts
    compare-and-set: the run changes only while it is still ``running`` under
    the executor's token, and only then does the configuration's last-run
    status follow.
@@ -58,12 +65,14 @@ def _resolve_test_record(target_test_name: str | None) -> TestRecord | None:
     An exact name match wins. Otherwise the name matches ignoring case and
     surrounding spaces, so a check naming "Policy Management" links to a test
     record named "Policy management ". Among several matches of the same kind
-    the record with the lowest id is chosen, so the link is deterministic.
+    an ``auto_assessment`` record is preferred, then the lowest id, so the
+    link is deterministic and a collector's result lands on the automated test
+    rather than on a self-assessment record that shares its name.
     """
     if not target_test_name:
         return None
     exact = (TestRecord.query.filter_by(name=target_test_name)
-             .order_by(TestRecord.id).first())
+             .order_by(_auto_assessment_first(), TestRecord.id).first())
     if exact is not None:
         return exact
     wanted = target_test_name.strip().lower()
@@ -71,7 +80,82 @@ def _resolve_test_record(target_test_name: str | None) -> TestRecord | None:
         return None
     return (TestRecord.query
             .filter(db.func.lower(db.func.trim(TestRecord.name)) == wanted)
-            .order_by(TestRecord.id).first())
+            .order_by(_auto_assessment_first(), TestRecord.id).first())
+
+
+def _auto_assessment_first():
+    """ORDER BY term that sorts ``auto_assessment`` records before the others."""
+    return db.case((TestRecord.test_type == "auto_assessment", 0), else_=1)
+
+
+class _TestTally:
+    """The pass/fail check results of one run for one test."""
+
+    MAX_FAILURES_LISTED = 5
+    MAX_MESSAGE_LENGTH = 200
+
+    def __init__(self, test_id: str):
+        self.test_id = test_id
+        self.passed = 0
+        self.failed = 0
+        self.failure_messages: list[str] = []
+        self.evidence_created = False
+
+    def add(self, cr: CheckResult, evidence_created: bool) -> None:
+        if cr.status == "pass":
+            self.passed += 1
+        elif cr.status == "fail":
+            self.failed += 1
+            self.failure_messages.append((cr.message or cr.check_name)[:self.MAX_MESSAGE_LENGTH])
+        self.evidence_created = self.evidence_created or evidence_created
+
+    @property
+    def outcome(self) -> str | None:
+        """``failure``, ``success``, or None when no check passed or failed."""
+        if self.failed:
+            return "failure"
+        return "success" if self.passed else None
+
+    def finding(self, collector_name: str) -> str:
+        total = self.passed + self.failed
+        if self.failed == 0:
+            return f"Collector {collector_name}: all {total} check(s) passed."
+        listed = "; ".join(self.failure_messages[:self.MAX_FAILURES_LISTED])
+        more = self.failed - len(self.failure_messages[:self.MAX_FAILURES_LISTED])
+        suffix = f"; and {more} more" if more > 0 else ""
+        return (f"Collector {collector_name}: {self.failed} of {total} check(s) failed. "
+                f"Failing: {listed}{suffix}")
+
+
+def _record_test_outcomes(tallies: dict[str, "_TestTally"], collector_name: str, run_id: str,
+                          member_id: str | None) -> int:
+    """Record each tallied test's result; returns how many tests changed.
+
+    Only ``auto_assessment`` tests that apply are tallied by the caller. The
+    write is attributed to the member who triggered the run, if any.
+    """
+    from app.models import TeamMember
+    from app.services.test_execution import apply_outcome, attributed_to
+
+    member = db.session.get(TeamMember, member_id) if member_id else None
+    recorded = 0
+    with attributed_to(member):
+        for tally in tallies.values():
+            outcome = tally.outcome
+            if outcome is None:
+                continue
+            test = db.session.get(TestRecord, tally.test_id)
+            if test is None or test.test_type != "auto_assessment" or test.status == "not_applicable":
+                continue
+            apply_outcome(
+                test, outcome,
+                finding=tally.finding(collector_name),
+                comment=f"Recorded by collector run {run_id} ({collector_name}).",
+                evidence_submitted=tally.evidence_created,
+            )
+            db.session.commit()
+            recorded += 1
+    return recorded
 
 
 def _maybe_create_evidence(
@@ -156,6 +240,7 @@ def execute_run(
     run_id = run.id
     token = run.executor_token
     config_id = run.collector_config_id
+    triggered_by = run.triggered_by_team_member_id
     config = _detached_copy(run.config)
     db.session.commit()  # no transaction stays open while the collector works
 
@@ -189,6 +274,7 @@ def execute_run(
     fail_count = 0
     error_count = 0
     evidence_count = 0
+    tallies: dict[str, _TestTally] = {}
 
     for cr in check_results:
         test_record = _resolve_test_record(cr.target_test_name)
@@ -209,12 +295,19 @@ def execute_run(
         ))
         db.session.commit()
 
+        if (test_record is not None and test_record.test_type == "auto_assessment"
+                and cr.status in ("pass", "fail")):
+            tally = tallies.setdefault(test_record.id, _TestTally(test_record.id))
+            tally.add(cr, evidence_created=evidence is not None)
+
         if cr.status == "pass":
             pass_count += 1
         elif cr.status == "fail":
             fail_count += 1
         elif cr.status == "error":
             error_count += 1
+
+    _record_test_outcomes(tallies, config.name, run_id, triggered_by)
 
     # A check that errored verified nothing: the run succeeds only when every
     # check that ran passed. "skipped" checks do not count either way.

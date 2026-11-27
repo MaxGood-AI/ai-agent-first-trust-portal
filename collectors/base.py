@@ -24,7 +24,12 @@ class CheckResult:
 
     ``target_test_name`` lets the executor resolve a TestRecord to link the
     created Evidence row to — exact name match first, then a match ignoring
-    case and surrounding spaces.
+    case and surrounding spaces; among several records of one name the
+    ``auto_assessment`` ones win. The checks naming an ``auto_assessment``
+    test also decide that test's result for the run: any ``fail`` records a
+    failure, at least one ``pass`` and no ``fail`` records a success, and
+    only ``error``/``skipped`` checks leave the test untouched. A
+    ``self_assessment`` test receives the evidence link only.
     """
 
     check_name: str
